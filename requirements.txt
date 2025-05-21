@@ -1,0 +1,4 @@
+requests>=2.32.3
+tqdm>=4.66.0
+streamlit>=1.0.0
+pandas>=1.0.0

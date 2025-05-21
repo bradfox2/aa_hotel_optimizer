@@ -1,0 +1,12 @@
+[project]
+name = "aa-hotel-optimizer"
+version = "0.1.0"
+description = "A library to find optimal AAdvantage hotel deals."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.32.3",
+    "tqdm>=4.66.0", # Added tqdm as a dependency
+    "streamlit>=1.0.0",
+    "pandas>=1.0.0",
+]
