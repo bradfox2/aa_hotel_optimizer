@@ -1,9 +1,20 @@
 import json
+import os  # Add os import
+import sys  # Add sys import
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
+
+# Add the project root to sys.path to ensure aa_hotel_optimizer is discoverable
+# This assumes streamlit_app.py is in the project root.
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+# Page config must be the first Streamlit command
+st.set_page_config(layout="wide")
 
 # Attempt to import from the local package
 try:
@@ -32,8 +43,6 @@ except ImportError:
 # Default target points, can be overridden by user input
 DEFAULT_TARGET_POINTS = 250000
 
-st.set_page_config(layout="wide")
-
 st.title("AAdvantage Hotel Optimizer")
 
 st.sidebar.header("Search Parameters")
@@ -56,6 +65,26 @@ aa_card_bonus_checkbox = st.sidebar.checkbox(
     value=False,
     help="Select if you are using an AAdvantage credit card for an extra 10 miles per dollar spent."
 )
+
+current_lp_balance_input = st.sidebar.number_input(
+    "Current Loyalty Points Balance", min_value=0, value=0, step=100,
+    help="Enter your current AAdvantage Loyalty Points balance to factor in status bonuses."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Search Mode")
+iterative_search_checkbox = st.sidebar.checkbox(
+    "Search future dates until LP target is met",
+    value=False,
+    help="If checked, the search will extend into future dates (up to ~6 months or as configured) until the LP target is met."
+)
+# Optionally, add an input for max_search_days if iterative_search_checkbox is checked.
+# For now, we'll use the default from the backend.
+# max_search_days_input = st.sidebar.number_input(
+# "Max search days ahead (for iterative search)", min_value=30, max_value=365, value=180, step=30,
+# disabled=not iterative_search_checkbox
+# )
+
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Optimization Strategy")
@@ -151,18 +180,26 @@ if st.sidebar.button("Search for Hotel Deals"):
         progress_bar_placeholder = st.empty()
         status_text_placeholder = st.empty()
 
-        def streamlit_progress_callback(completed_count: int, total_count: int):
+        # Updated progress callback to handle iterative search feedback
+        def streamlit_progress_callback(completed_count: int, total_count: int, current_iter: Optional[int] = None, iter_end_date: Optional[str] = None):
             progress = 0.0
-            if total_count > 0: # Avoid division by zero
+            if total_count > 0:  # Avoid division by zero
                 progress = completed_count / total_count
+            
             progress_bar_placeholder.progress(progress)
-            status_text_placeholder.text(f"Processed {completed_count}/{total_count} dates...")
+            
+            if iterative_search_checkbox and current_iter is not None and iter_end_date is not None:
+                status_text_placeholder.text(
+                    f"Iteration {current_iter}: Processed {completed_count}/{total_count} dates (up to {iter_end_date}). Searching for more..."
+                )
+            else:
+                status_text_placeholder.text(f"Processed {completed_count}/{total_count} dates...")
 
         # Define styling function here to ensure it's in scope
-        def style_ppd_column(df):
-            if 'points_per_dollar' in df.columns and pd.api.types.is_numeric_dtype(df['points_per_dollar']) and not df['points_per_dollar'].empty:
-                if df['points_per_dollar'].count() > 0: 
-                     return df.style.background_gradient(subset=['points_per_dollar'], cmap='Greens', low=0.1, high=1.0)
+        def style_ppd_column(df, column_name='points_per_dollar'): # Add column_name parameter
+            if column_name in df.columns and pd.api.types.is_numeric_dtype(df[column_name]) and not df[column_name].empty:
+                if df[column_name].count() > 0: 
+                     return df.style.background_gradient(subset=[column_name], cmap='Greens', low=0.1, high=1.0)
             return df # Return unstyled df if column not suitable or empty
 
         status_text_placeholder.text(f"Initiating search for {city_query}...")
@@ -177,7 +214,10 @@ if st.sidebar.button("Search for Hotel Deals"):
                 target_loyalty_points=target_loyalty_points,
                 progress_callback=streamlit_progress_callback,
                 aa_card_bonus=aa_card_bonus_checkbox,
-                optimization_strategy=optimization_strategy_value, # Pass selected strategy
+                optimization_strategy=optimization_strategy_value,
+                iterative_search_for_lp_target=iterative_search_checkbox,
+                # max_search_days_iterative=max_search_days_input, # If we add this input
+                current_lp_balance=current_lp_balance_input, # Pass current LP balance
             )
             
             progress_bar_placeholder.empty()
@@ -186,10 +226,13 @@ if st.sidebar.button("Search for Hotel Deals"):
             st.subheader("All Hotel Options Found")
             if all_hotel_options:
                 df_all_options = pd.DataFrame(all_hotel_options)
+                # Updated columns to show more point details available at this stage
                 display_cols_all = [
                     "name", "location", "check_in_date", "total_price",
-                    "points_earned", "points_per_dollar", "refundability",
-                    "star_rating", "user_rating",
+                    "api_points_earned", "card_bonus_points", # Added
+                    "points_earned", # This is api_points + card_bonus
+                    "points_per_dollar", # Based on api_points + card_bonus
+                    "refundability", "star_rating", "user_rating",
                 ]
                 df_all_options_display = df_all_options[[col for col in display_cols_all if col in df_all_options.columns]].copy()
 
@@ -203,15 +246,17 @@ if st.sidebar.button("Search for Hotel Deals"):
                 
                 final_display_cols_all = [col for col in display_cols_all if col in df_all_options_display.columns]
 
-                if "points_per_dollar" in df_all_options_display.columns:
-                    df_all_options_display = df_all_options_display.sort_values(by="points_per_dollar", ascending=False)
+                if "points_per_dollar" in df_all_options_display.columns and pd.api.types.is_numeric_dtype(df_all_options_display["points_per_dollar"]):
+                    df_all_options_display = df_all_options_display.sort_values(by=["points_per_dollar"], ascending=False)
 
                 column_config_all = {
                     "name": st.column_config.TextColumn("Hotel Name", width="large"),
                     "location": "Location", "check_in_date": "Check-in",
                     "total_price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                    "points_earned": st.column_config.NumberColumn("Points", format="%d"),
-                    "points_per_dollar": st.column_config.NumberColumn("Points/$", format="%.2f"),
+                    "api_points_earned": st.column_config.NumberColumn("API Points", format="%d", help="Base points from the hotel booking."),
+                    "card_bonus_points": st.column_config.NumberColumn("Card Bonus", format="%d", help="Points from AA credit card (10 miles/$)."),
+                    "points_earned": st.column_config.NumberColumn("Base+Card LP", format="%d", help="API Points + Card Bonus. Status bonus is applied during itinerary selection."),
+                    "points_per_dollar": st.column_config.NumberColumn("Base+Card PPD", format="%.2f", help="PPD based on API Points + Card Bonus."),
                     "refundability": "Refundable",
                     "star_rating_display": st.column_config.TextColumn("Stars"),
                     "user_rating": st.column_config.NumberColumn("Rating", format="%.1f"),
@@ -254,21 +299,30 @@ if st.sidebar.button("Search for Hotel Deals"):
                 st.markdown("---")
                 st.write("Itinerary Details:")
                 df_itinerary = pd.DataFrame(final_itinerary)
+                # Updated columns to show detailed point breakdown
                 display_cols_itinerary = [
                     "name", "location", "check_in_date", "total_price",
-                    "points_earned", "points_per_dollar",
+                    "api_points_earned", "card_bonus_points", "status_bonus_points",
+                    "points_earned_final_for_itinerary", "points_per_dollar_final_for_itinerary",
                 ]
                 df_itinerary_display = df_itinerary[[col for col in display_cols_itinerary if col in df_itinerary.columns]].copy()
+                
+                # Updated column configurations for the new detailed view
                 column_config_itinerary = {
                     "name": st.column_config.TextColumn("Hotel Name", width="large"),
-                    "location": "Location", "check_in_date": "Check-in",
+                    "location": "Location",
+                    "check_in_date": "Check-in",
                     "total_price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                    "points_earned": st.column_config.NumberColumn("Points", format="%d"),
-                    "points_per_dollar": st.column_config.NumberColumn("Points/$", format="%.2f"),
+                    "api_points_earned": st.column_config.NumberColumn("API Points", format="%d", help="Base points from the hotel booking."),
+                    "card_bonus_points": st.column_config.NumberColumn("Card Bonus", format="%d", help="Points from AA credit card (10 miles/$)."),
+                    "status_bonus_points": st.column_config.NumberColumn("Status Bonus", format="%d", help="Points from AAdvantage status bonus."),
+                    "points_earned_final_for_itinerary": st.column_config.NumberColumn("Total Stay LP", format="%d", help="Total Loyalty Points for this stay (API + Card + Status)."),
+                    "points_per_dollar_final_for_itinerary": st.column_config.NumberColumn("Stay PPD", format="%.2f", help="Total Loyalty Points / Price for this stay."),
                 }
                 active_column_config_itinerary = {k:v for k,v in column_config_itinerary.items() if k in df_itinerary_display.columns}
                 
-                styled_df_itinerary = style_ppd_column(df_itinerary_display)
+                # Style based on the final PPD for the itinerary
+                styled_df_itinerary = style_ppd_column(df_itinerary_display, column_name='points_per_dollar_final_for_itinerary')
                 st.dataframe(styled_df_itinerary, column_config=active_column_config_itinerary)
             else:
                 st.write(
