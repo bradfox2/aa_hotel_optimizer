@@ -408,6 +408,7 @@ def find_best_hotel_deals(
     end_date: date,
     session_headers: Dict[str, str],
     target_loyalty_points: int,
+    progress_callback: Optional[callable] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, int]:
     """
     Finds the best hotel deals for a given city and date range.
@@ -491,11 +492,16 @@ def find_best_hotel_deals(
             for current_date in date_range
         }
 
+        # Disable tqdm if a progress_callback is provided, as UI will handle progress
+        disable_tqdm = progress_callback is not None
+        completed_count = 0
+
         for future in tqdm(
             concurrent.futures.as_completed(future_to_date),
             total=len(date_range),
             desc="Searching dates",
-            file=sys.stderr,
+            file=sys.stderr, # Keep tqdm output to stderr for CLI
+            disable=disable_tqdm, # Disable tqdm if callback is used
         ):
             try:
                 stays_on_date = future.result()
@@ -505,7 +511,11 @@ def find_best_hotel_deals(
                 logging.error(
                     f"An error occurred while fetching data for a date: {exc}"
                 )
-
+            finally:
+                completed_count += 1
+                if progress_callback:
+                    progress_callback(completed_count, len(date_range))
+    
     if not all_hotel_options:
         logging.info(
             "\nNo hotel options found for the specified location and date range."
@@ -638,12 +648,14 @@ def main():
     # This entire block will be replaced by a call to find_best_hotel_deals.
 
     # Call the parallelized function
+    # For CLI usage, we don't have a progress_callback from Streamlit, so it will be None
     all_hotel_options_main, final_itinerary_main, total_cost_main, total_points_earned_main = find_best_hotel_deals(
         city_query=location_query,
         start_date=start_date,
         end_date=end_date,
         session_headers=final_session_headers,
-        target_loyalty_points=args.target_lp # Use the arg from CLI
+        target_loyalty_points=args.target_lp, # Use the arg from CLI
+        progress_callback=None # Explicitly None for CLI
     )
 
     if not all_hotel_options_main:
