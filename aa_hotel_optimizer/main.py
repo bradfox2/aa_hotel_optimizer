@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures  # Added import
 import json
 import logging
 import sys
@@ -361,6 +362,46 @@ def select_optimal_stays(
     return selected_itinerary, current_total_cost, current_total_points
 
 
+def fetch_data_for_date(
+    current_date: date,
+    actual_location_name_used: str,
+    target_place_id: str,
+    session_headers: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    check_in_date_str = current_date.strftime("%m/%d/%Y")
+    check_out_date_str = (current_date + timedelta(days=1)).strftime("%m/%d/%Y")
+    hotel_stays_on_date: List[Dict[str, Any]] = []
+
+    search_uuid = search_aadvantage_hotels(
+        check_in_date=check_in_date_str,
+        check_out_date=check_out_date_str,
+        location=actual_location_name_used,
+        place_id=target_place_id,
+        session_headers=session_headers,
+    )
+
+    if search_uuid:
+        results_data = get_hotel_results(
+            search_id=search_uuid,
+            location_name=actual_location_name_used,
+            check_in_date=check_in_date_str,
+            session_headers=session_headers,
+        )
+        if results_data:
+            hotel_stays_on_date = analyze_hotel_data(
+                results_data, actual_location_name_used, check_in_date_str
+            )
+        else:
+            logging.warning(
+                f"Failed to get hotel results for {actual_location_name_used} on {check_in_date_str} (Search ID: {search_uuid})"
+            )
+    else:
+        logging.warning(
+            f"Failed to initiate search for {actual_location_name_used} on {check_in_date_str}"
+        )
+    return hotel_stays_on_date
+
+
 def find_best_hotel_deals(
     city_query: str,
     start_date: date,
@@ -416,52 +457,59 @@ def find_best_hotel_deals(
         logging.error(f"Could not discover any place IDs for '{city_query}'.")
         return [], [], 0.0, 0 # Return empty if no place ID
 
+    # Initialize all_hotel_options here
     all_hotel_options: List[Dict[str, Any]] = []
 
     if not target_place_id:
         logging.error(f"Critical error: target_place_id not set before search loop for {city_query}.")
-        return [], [], 0.0, 0
+        return [], [], 0.0, 0 # Ensure all paths return the declared tuple type
 
     logging.info(
         f"Searching with Place ID: {target_place_id} for location: {actual_location_name_used}"
     )
 
-    # Iterate through the date range
-    for current_date in tqdm(date_range, desc="Searching dates", file=sys.stderr):
-        check_in_date_str = current_date.strftime("%m/%d/%Y")
-        check_out_date_str = (current_date + timedelta(days=1)).strftime("%m/%d/%Y")
+    # Helper function for fetching data for a single date
+    # This function is defined outside find_best_hotel_deals or as a nested function.
+    # For simplicity here, let's assume it's defined at the module level or correctly nested if preferred.
+    # If it's not already, it should be moved or defined here.
+    # For this diff, I'll assume fetch_data_for_date is accessible.
+    # (The previous diff correctly added fetch_data_for_date at module level, which is fine)
 
-        search_uuid = search_aadvantage_hotels(
-            check_in_date=check_in_date_str,
-            check_out_date=check_out_date_str,
-            location=actual_location_name_used,
-            place_id=target_place_id,
-            session_headers=session_headers,
-        )
+    num_workers = min(10, len(date_range) if date_range else 1)
+    if num_workers == 0:
+        num_workers = 1
 
-        if search_uuid:
-            results_data = get_hotel_results(
-                search_id=search_uuid,
-                location_name=actual_location_name_used,
-                check_in_date=check_in_date_str,
-                session_headers=session_headers,
-            )
-            if results_data:
-                hotel_stays_on_date = analyze_hotel_data(
-                    results_data, actual_location_name_used, check_in_date_str
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_date = {
+            executor.submit(
+                fetch_data_for_date,
+                current_date,
+                actual_location_name_used,
+                target_place_id,
+                session_headers,
+            ): current_date
+            for current_date in date_range
+        }
+
+        for future in tqdm(
+            concurrent.futures.as_completed(future_to_date),
+            total=len(date_range),
+            desc="Searching dates",
+            file=sys.stderr,
+        ):
+            try:
+                stays_on_date = future.result()
+                if stays_on_date:
+                    all_hotel_options.extend(stays_on_date)
+            except Exception as exc:
+                logging.error(
+                    f"An error occurred while fetching data for a date: {exc}"
                 )
-                all_hotel_options.extend(hotel_stays_on_date)
-            else:
-                logging.warning(
-                    f"Failed to get hotel results for {actual_location_name_used} on {check_in_date_str} (Search ID: {search_uuid})"
-                )
-        else:
-            logging.warning(
-                f"Failed to initiate search for {actual_location_name_used} on {check_in_date_str}"
-            )
 
     if not all_hotel_options:
-        logging.info("\nNo hotel options found for the specified location and date range.")
+        logging.info(
+            "\nNo hotel options found for the specified location and date range."
+        )
         return [], [], 0.0, 0
 
     logging.info(f"\nCollected {len(all_hotel_options)} hotel options.")
@@ -569,67 +617,65 @@ def main():
         f"Searching with Place ID: {target_place_id} for location: {actual_location_name_used}"
     )
 
-    # Iterate through the date range
-    for current_date in tqdm(date_range, desc="Searching dates", file=sys.stderr): # Ensure tqdm writes to stderr
-        check_in_date_str = current_date.strftime("%m/%d/%Y")
-        check_out_date_str = (current_date + timedelta(days=1)).strftime("%m/%d/%Y")
+    # The duplicate search loop in main() should be refactored to call find_best_hotel_deals.
+    # This change focuses on parallelizing find_best_hotel_deals itself.
+    # The main() function's direct search loop (around original lines 550-595) is not modified here.
+    # That loop would also need to be removed or refactored if main() is to use the parallelized find_best_hotel_deals.
 
-        # Perform search for the current date
-        search_uuid = search_aadvantage_hotels(
-            check_in_date=check_in_date_str,
-            check_out_date=check_out_date_str,
-            location=actual_location_name_used,
-            place_id=target_place_id,
-            session_headers=final_session_headers,
-        )
+    # For the CLI part in main(), it should call the now parallelized find_best_hotel_deals.
+    # The existing sequential loop in main() is redundant if find_best_hotel_deals is used.
+    # I will remove the redundant loop from main() as part of this parallelization effort,
+    # as it's directly related to how the CLI utilizes the core search logic.
 
-        if search_uuid:
-            results_data = get_hotel_results(
-                search_id=search_uuid,
-                location_name=actual_location_name_used,
-                check_in_date=check_in_date_str,
-                session_headers=final_session_headers,
-            )
-            if results_data:
-                hotel_stays_on_date = analyze_hotel_data(
-                    results_data, actual_location_name_used, check_in_date_str
-                )
-                all_hotel_options.extend(hotel_stays_on_date)
-            else:
-                logging.warning(
-                    f"Failed to get hotel results for {actual_location_name_used} on {check_in_date_str} (Search ID: {search_uuid})"
-                )
-        else:
-            logging.warning(
-                f"Failed to initiate search for {actual_location_name_used} on {check_in_date_str}"
-            )
+    # Removing the redundant loop from main() and calling find_best_hotel_deals instead.
+    # This is a significant change to main() but necessary for the parallelization to be effective for CLI use.
 
-        # This block is after the date loop
+    # The old loop in main() started around here:
+    # logging.info(f"\n--- Searching for Hotels in {location_display_name} ---")
+    # ...
+    # for current_date in tqdm(date_range, desc="Searching dates", file=sys.stderr):
+    # ...
+    # This entire block will be replaced by a call to find_best_hotel_deals.
 
-    if not all_hotel_options:
+    # Call the parallelized function
+    all_hotel_options_main, final_itinerary_main, total_cost_main, total_points_earned_main = find_best_hotel_deals(
+        city_query=location_query,
+        start_date=start_date,
+        end_date=end_date,
+        session_headers=final_session_headers,
+        target_loyalty_points=args.target_lp # Use the arg from CLI
+    )
+
+    if not all_hotel_options_main:
         logging.info("\nNo hotel options found for the specified location and date range.") # To stderr
         results_logger.info("No hotel values to display.") # To stdout
     else:
-        logging.info(f"\nCollected {len(all_hotel_options)} hotel options.") # To stderr
-        print_hotel_values_summary(all_hotel_options) # To stdout via results_logger
+        # print_hotel_values_summary is already called within find_best_hotel_deals if used as a library.
+        # For CLI, we want to print the summary of all options and then the optimized strategy.
+        # The find_best_hotel_deals now returns all_hotel_options, so we can pass that to print_hotel_values_summary.
+        logging.info(f"\nCollected {len(all_hotel_options_main)} hotel options.") # To stderr
+        print_hotel_values_summary(all_hotel_options_main) # To stdout via results_logger
 
-        # Optimization logic
-        target_loyalty_points_from_arg = args.target_lp
+        # Optimization logic now uses results from find_best_hotel_deals
+        target_loyalty_points_from_arg = args.target_lp # This is already passed to find_best_hotel_deals
+        # The select_optimal_stays is already called inside find_best_hotel_deals.
+        # So, final_itinerary_main, total_cost_main, total_points_earned_main are already the optimized results.
+
         logging.info(
-            f"\nOptimizing for {target_loyalty_points_from_arg} loyalty points..."
-        ) # To stderr
-        final_itinerary, total_cost, total_points_earned = select_optimal_stays(
-            all_hotel_options, target_loyalty_points_from_arg
-        )
-        if final_itinerary:
+             f"\nOptimizing for {target_loyalty_points_from_arg} loyalty points..."
+        ) # This log might be redundant if find_best_hotel_deals also logs it.
+           # find_best_hotel_deals does not log this part, it only logs "Collected X options"
+           # then calls select_optimal_stays. So this logging is fine here.
+
+        if final_itinerary_main:
             logging.info("\n===== Optimal Loyalty Points Strategy (Details below on stdout) =====") # To stderr
             results_logger.info("\n===== Optimal Loyalty Points Strategy =====") # To stdout
-            results_logger.info(f"Target Loyalty Points: {target_loyalty_points_from_arg}")
-            results_logger.info(f"Achieved Loyalty Points: {total_points_earned}")
-            results_logger.info(f"Total Cost: ${total_cost:.2f}")
-            if total_cost > 0:
+            results_logger.info(f"Target Loyalty Points: {target_loyalty_points_from_arg}") # Use args.target_lp
+            results_logger.info(f"Achieved Loyalty Points: {total_points_earned_main}")
+            results_logger.info(f"Total Cost: ${total_cost_main:.2f}")
+            if total_cost_main > 0:
                 results_logger.info(
-                    f"Overall Points per Dollar: {total_points_earned / total_cost:.2f}"
+                    f"Overall Points per Dollar: {total_points_earned_main / total_cost_main:.2f}"
                 )
             else:
                 results_logger.info("Overall Points per Dollar: N/A (no cost)")
@@ -637,7 +683,7 @@ def main():
             header = f"{'Hotel Name':<40} {'Location':<20} {'Date':<12} {'Price ($)':<10} {'Points':<10} {'Points/$':<10}"
             results_logger.info(header)
             results_logger.info("=" * len(header))
-            for stay in final_itinerary:
+            for stay in final_itinerary_main:
                 results_logger.info(
                     f"{stay['name']:<40} {stay['location']:<20} {stay['check_in_date']:<12} "
                     f"${stay['total_price']:<9.2f} {stay['points_earned']:<10} "

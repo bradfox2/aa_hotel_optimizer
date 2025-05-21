@@ -121,25 +121,78 @@ if st.sidebar.button("Search for Hotel Deals"):
                         "user_rating",
                     ]
                     # Filter out columns that might not exist if the list is empty or structure changes
-                    df_all_options_display = df_all_options[[col for col in display_cols_all if col in df_all_options.columns]]
+                    df_all_options_display = df_all_options[[col for col in display_cols_all if col in df_all_options.columns]].copy() # Use .copy() to avoid SettingWithCopyWarning
+
+                    # Pre-process for better display
+                    if "refundability" in df_all_options_display.columns:
+                        df_all_options_display.loc[:, "refundability"] = df_all_options_display["refundability"].apply(
+                            lambda x: "✅ Refundable" if x == "REFUNDABLE" else ("❌ Non-Refundable" if x == "NON_REFUNDABLE" else "❓ Unknown")
+                        )
+                    if "star_rating" in df_all_options_display.columns:
+                         df_all_options_display.loc[:, "star_rating_display"] = df_all_options_display["star_rating"].apply(lambda x: f"{x:.1f} ⭐" if pd.notna(x) and x > 0 else "N/A")
+                         display_cols_all = [col if col != "star_rating" else "star_rating_display" for col in display_cols_all]
+
+
                     if "points_per_dollar" in df_all_options_display.columns:
                         df_all_options_display = df_all_options_display.sort_values(by="points_per_dollar", ascending=False)
-                    st.dataframe(df_all_options_display)
+
+                    # Define column configurations
+                    column_config_all = {
+                        "name": st.column_config.TextColumn("Hotel Name", width="large"),
+                        "location": "Location",
+                        "check_in_date": "Check-in",
+                        "total_price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                        "points_earned": st.column_config.NumberColumn("Points", format="%d"),
+                        "points_per_dollar": st.column_config.NumberColumn("Points/$", format="%.2f"),
+                        "refundability": "Refundable",
+                        "star_rating_display": st.column_config.TextColumn("Stars"),
+                        "user_rating": st.column_config.NumberColumn("Rating", format="%.1f"),
+                    }
+                    # Ensure we only try to configure columns that exist
+                    active_column_config_all = {k: v for k, v in column_config_all.items() if k in df_all_options_display.columns or (k == "star_rating_display" and "star_rating" in df_all_options.columns)}
+
+
+                    st.dataframe(df_all_options_display[[col for col in display_cols_all if col in df_all_options_display.columns or col == "star_rating_display"]], column_config=active_column_config_all)
+
+                    # Add visualizations
+                    st.markdown("---")
+                    st.subheader("Visualizations for All Hotel Options")
+                    
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if "points_per_dollar" in df_all_options_display.columns and not df_all_options_display["points_per_dollar"].empty:
+                            st.write("Distribution of Points per Dollar")
+                            st.bar_chart(df_all_options_display["points_per_dollar"].value_counts().sort_index())
+                        else:
+                            st.write("Points per Dollar data not available for histogram.")
+                    
+                    with col2:
+                        if "total_price" in df_all_options_display.columns and \
+                           "points_earned" in df_all_options_display.columns and \
+                           not df_all_options_display[["total_price", "points_earned"]].empty:
+                            st.write("Total Price vs. Points Earned")
+                            # Create a new DataFrame for the scatter chart to avoid modifying the original
+                            scatter_df = df_all_options_display[["total_price", "points_earned"]].copy()
+                            scatter_df.columns = ['Total Price ($)', 'Points Earned'] # Rename for better axis labels
+                            st.scatter_chart(scatter_df, x='Total Price ($)', y='Points Earned')
+                        else:
+                            st.write("Price/Points data not available for scatter plot.")
+                    st.markdown("---")
+
                 else:
                     st.write("No hotel options found for the given criteria.")
 
                 st.subheader("Optimal Loyalty Points Strategy")
                 if final_itinerary:
-                    st.write(f"Target Loyalty Points: {target_loyalty_points}")
-                    st.write(f"Achieved Loyalty Points: {total_points_earned}")
-                    st.write(f"Total Cost: ${total_cost:.2f}")
-                    if total_cost > 0:
-                        st.write(
-                            f"Overall Points per Dollar: {total_points_earned / total_cost:.2f}"
-                        )
-                    else:
-                        st.write("Overall Points per Dollar: N/A (no cost)")
-
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Target LP", f"{target_loyalty_points:,}")
+                    col2.metric("Achieved LP", f"{total_points_earned:,}")
+                    col3.metric("Total Cost", f"${total_cost:,.2f}")
+                    overall_ppd = (total_points_earned / total_cost) if total_cost > 0 else 0
+                    col4.metric("Overall PPD", f"{overall_ppd:.2f}")
+                    
+                    st.markdown("---") # Visual separator
                     st.write("Itinerary Details:")
                     df_itinerary = pd.DataFrame(final_itinerary)
                     display_cols_itinerary = [
@@ -150,8 +203,19 @@ if st.sidebar.button("Search for Hotel Deals"):
                         "points_earned",
                         "points_per_dollar",
                     ]
-                    df_itinerary_display = df_itinerary[[col for col in display_cols_itinerary if col in df_itinerary.columns]]
-                    st.dataframe(df_itinerary_display)
+                    df_itinerary_display = df_itinerary[[col for col in display_cols_itinerary if col in df_itinerary.columns]].copy()
+
+                    column_config_itinerary = {
+                        "name": st.column_config.TextColumn("Hotel Name", width="large"),
+                        "location": "Location",
+                        "check_in_date": "Check-in",
+                        "total_price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                        "points_earned": st.column_config.NumberColumn("Points", format="%d"),
+                        "points_per_dollar": st.column_config.NumberColumn("Points/$", format="%.2f"),
+                    }
+                    active_column_config_itinerary = {k:v for k,v in column_config_itinerary.items() if k in df_itinerary_display.columns}
+
+                    st.dataframe(df_itinerary_display, column_config=active_column_config_itinerary)
 
                 else:
                     st.write(
