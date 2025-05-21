@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures  # Added import
 import json
 import logging
+import re  # Added for cURL parsing
 import sys
 import time
 import urllib.parse
@@ -47,6 +48,66 @@ PHOENIX_METRO_KEYWORDS = [
     "avondale",
     "goodyear",
 ]
+
+
+def parse_curl_command(curl_command: str) -> Tuple[Optional[str], Dict[str, str]]:
+    """
+    Parses a cURL command string (typically copied from browser developer tools)
+    and extracts the URL and headers.
+
+    Args:
+        curl_command: The cURL command string.
+
+    Returns:
+        A tuple containing:
+        - The URL string (or None if not found).
+        - A dictionary of headers.
+    """
+    headers: Dict[str, str] = {}
+    url: Optional[str] = None
+
+    # Extract URL (first non-option argument that looks like a URL)
+    # This regex looks for 'curl' followed by space, then captures the URL.
+    # It assumes the URL is the first main argument after 'curl'.
+    url_match = re.search(r"curl\s+'([^']*)'", curl_command)
+    if not url_match: # Try with double quotes if single quotes fail
+        url_match = re.search(r'curl\s+"([^"]*)"', curl_command)
+    if url_match:
+        url = url_match.group(1)
+
+    # Extract headers (-H or --header)
+    # Regex to find -H 'Header-Name: Header-Value'
+    header_matches = re.findall(r"-H\s+'([^']*)'", curl_command)
+    for header_str in header_matches:
+        if ":" in header_str:
+            name, value = header_str.split(":", 1)
+            headers[name.strip()] = value.strip()
+
+    # Extract cookies (-b or --cookie) and add them as a 'Cookie' header
+    # Regex to find -b 'cookie_string'
+    cookie_match = re.search(r"-b\s+'([^']*)'", curl_command)
+    if not cookie_match: # Try with double quotes
+        cookie_match = re.search(r'-b\s+"([^"]*)"', curl_command)
+    
+    if cookie_match:
+        cookie_string = cookie_match.group(1)
+        if "Cookie" in headers:
+            # This case should ideally not happen if cURL is well-formed,
+            # but good to be aware. Overwriting or appending might be options.
+            # For now, let's assume -b is the primary source for the Cookie header.
+            logging.warning("Cookie header already found, -b will overwrite it.")
+        headers["Cookie"] = cookie_string.strip()
+        
+    # Remove any backslashes used for line continuation in the cURL command
+    # This is more for cleaning up the input if it's multi-line.
+    # The regexes above should handle typical browser-copied cURL.
+
+    # It's also common for cURL commands from browsers to have many headers.
+    # We are extracting all of them. The calling function will use what it needs.
+    # Specifically, 'user-agent', 'accept', 'accept-language', 'x-xsrf-token',
+    # and the 'Cookie' header are often important.
+
+    return url, headers
 
 
 def discover_phoenix_metro_place_ids(
@@ -246,7 +307,10 @@ def get_hotel_results(
 
 
 def analyze_hotel_data(
-    search_results_data: Dict[str, Any], location_name: str, check_in_date_str: str
+    search_results_data: Dict[str, Any],
+    location_name: str,
+    check_in_date_str: str,
+    aa_card_bonus: bool = False,  # Added parameter
 ) -> List[Dict[str, Any]]:
     hotels_value: List[Dict[str, Any]] = []
     if not search_results_data or "results" not in search_results_data:
@@ -262,7 +326,13 @@ def analyze_hotel_data(
         total_price = hotel_data_item.get(
             "grandTotalPublishedPriceInclusiveWithFees", {}
         ).get("amount", 0.0)
-        points_earned = hotel_data_item.get("rewards", 0)
+        api_points_earned = hotel_data_item.get("rewards", 0) # Renamed for clarity
+        
+        card_bonus_points = 0
+        if aa_card_bonus and total_price > 0:
+            card_bonus_points = int(round(total_price * 10)) # Calculate bonus points
+
+        points_earned = api_points_earned + card_bonus_points # Total points including bonus
 
         # Debug log for the specific test case
         if (
@@ -273,7 +343,10 @@ def analyze_hotel_data(
                 f"\nDEBUG: Raw data for '{hotel_name}' in '{location_name}' on {check_in_date_str}:"
             )
             logging.debug(f"  Raw hotel_data_item: {json.dumps(hotel_data_item, indent=2)}")
-            logging.debug(f"  Extracted points_earned (from 'rewards'): {points_earned}")
+            logging.debug(f"  API points_earned (from 'rewards'): {api_points_earned}")
+            if aa_card_bonus:
+                logging.debug(f"  Card bonus points: {card_bonus_points}")
+            logging.debug(f"  Total points_earned (after bonus): {points_earned}")
             logging.debug(f"  Price: {total_price}")
             logging.debug(f"  rewardsBeforeBoost: {hotel_data_item.get('rewardsBeforeBoost')}")
             logging.debug(f"  boostedRewards: {hotel_data_item.get('boostedRewards')}")
@@ -288,7 +361,9 @@ def analyze_hotel_data(
                 "location": location_name,
                 "check_in_date": check_in_date_str,
                 "total_price": total_price,
-                "points_earned": points_earned,
+                "api_points_earned": api_points_earned, # Store original API points
+                "card_bonus_points": card_bonus_points, # Store bonus points
+                "points_earned": points_earned, # This is the total
                 "points_per_dollar": points_per_dollar,
                 "refundability": refundability,
                 "star_rating": hotel_details.get("stars", 0.0),
@@ -341,25 +416,108 @@ def generate_date_range(start_date: date, end_date: date) -> List[date]:
 def select_optimal_stays(
     all_stays: List[Dict[str, Any]], target_points: int
 ) -> Tuple[List[Dict[str, Any]], float, int]:
-    sorted_stays = sorted(
-        all_stays,
-        key=lambda x: (x["points_per_dollar"], -x["total_price"], x["check_in_date"]),
-        reverse=True,
-    )
-    selected_itinerary: List[Dict[str, Any]] = []
-    current_total_points = 0
-    current_total_cost = 0.0
-    booked_dates: set[str] = set()
-    for stay in sorted_stays:
-        if current_total_points >= target_points:
-            break
-        check_in_str = stay["check_in_date"]
-        if check_in_str not in booked_dates:
-            selected_itinerary.append(stay)
-            current_total_points += stay["points_earned"]
-            current_total_cost += stay["total_price"]
-            booked_dates.add(check_in_str)
-    return selected_itinerary, current_total_cost, current_total_points
+    """
+    Selects an optimal set of hotel stays to achieve the target loyalty points
+    at the minimum possible cost, using Dynamic Programming.
+    Ensures that each date is booked at most once by pre-selecting the cheapest stay per date.
+    """
+    if not all_stays or target_points <= 0:
+        return [], 0.0, 0
+
+    # Data Preparation: Select the cheapest stay per date that offers points
+    cheapest_stay_per_date: Dict[str, Dict[str, Any]] = {}
+    for stay in all_stays:
+        if stay.get("points_earned", 0) > 0 and stay.get("total_price", float('inf')) > 0: # Consider only stays with points and positive price
+            date_str = stay["check_in_date"]
+            current_price = stay["total_price"]
+            if date_str not in cheapest_stay_per_date or \
+               current_price < cheapest_stay_per_date[date_str]["total_price"]:
+                cheapest_stay_per_date[date_str] = stay
+            elif current_price == cheapest_stay_per_date[date_str]["total_price"] and \
+                 stay["points_earned"] > cheapest_stay_per_date[date_str]["points_earned"]:
+                 # If prices are equal, prefer the one with more points
+                cheapest_stay_per_date[date_str] = stay
+
+
+    candidate_stays = list(cheapest_stay_per_date.values())
+    
+    if not candidate_stays:
+        logging.info("No candidate stays with positive points and price found for DP.")
+        return [], 0.0, 0
+
+    # DP Initialization
+    # Determine max_dp_points: target_points + a buffer (e.g., max points from a single candidate stay or a fixed buffer)
+    # This buffer helps find solutions that might slightly exceed target_points but cost less overall.
+    max_single_stay_points = 0
+    if candidate_stays: # Ensure candidate_stays is not empty
+        max_single_stay_points = max(s["points_earned"] for s in candidate_stays if s["points_earned"] > 0)
+    
+    # Ensure max_dp_points is at least target_points, even if max_single_stay_points is 0 or small.
+    # A fixed buffer like 50000 might be too large if target_points is small.
+    # Let's use a slightly more dynamic buffer, e.g., 20% of target or max_single_stay_points.
+    buffer_points = max(max_single_stay_points, int(target_points * 0.2), 1000) # Ensure some buffer
+    max_dp_points = target_points + buffer_points
+    if max_dp_points < target_points : # Should not happen with positive buffer, but as a safeguard
+        max_dp_points = target_points
+
+
+    dp_min_cost = [float('inf')] * (max_dp_points + 1)
+    dp_itinerary = [[] for _ in range(max_dp_points + 1)] # Stores list of stays
+    dp_min_cost[0] = 0.0
+
+    # DP Calculation
+    for stay in candidate_stays:
+        s_cost = stay["total_price"]
+        s_points = stay["points_earned"]
+
+        if s_points <= 0: # Should have been filtered, but double check
+            continue
+
+        # Iterate downwards to use each stay (item) at most once
+        for p in range(max_dp_points, s_points - 1, -1):
+            if dp_min_cost[p - s_points] != float('inf'):
+                cost_if_taken = dp_min_cost[p - s_points] + s_cost
+                if cost_if_taken < dp_min_cost[p]:
+                    dp_min_cost[p] = cost_if_taken
+                    # Store a copy of the previous itinerary and add the current stay
+                    dp_itinerary[p] = list(dp_itinerary[p - s_points]) + [stay]
+                elif cost_if_taken == dp_min_cost[p]:
+                    # Tie-breaking: if costs are equal, prefer itinerary with more points or fewer stays
+                    # For now, let's prefer the one that achieves 'p' points with fewer stays if costs are identical.
+                    # Or, if this new path to 'p' uses fewer stays than the existing path to 'p'.
+                    if len(dp_itinerary[p - s_points]) + 1 < len(dp_itinerary[p]):
+                         dp_itinerary[p] = list(dp_itinerary[p - s_points]) + [stay]
+
+
+    # Extracting Solution: Find the minimum cost for achieving at least target_points
+    final_itinerary: List[Dict[str, Any]] = []
+    min_total_cost = float('inf')
+    achieved_points = 0
+
+    for p in range(target_points, max_dp_points + 1):
+        if dp_min_cost[p] < min_total_cost:
+            min_total_cost = dp_min_cost[p]
+            final_itinerary = dp_itinerary[p]
+            achieved_points = p
+        elif dp_min_cost[p] == min_total_cost:
+            # If costs are identical, prefer the one that achieves more points
+            # or, if points are also identical, prefer fewer stays.
+            if p > achieved_points: # More points for same min_cost
+                final_itinerary = dp_itinerary[p]
+                achieved_points = p
+            elif p == achieved_points and len(dp_itinerary[p]) < len(final_itinerary): # Same points, fewer stays
+                 final_itinerary = dp_itinerary[p]
+                 # achieved_points remains the same
+
+
+    if min_total_cost == float('inf'):
+        logging.info(f"Could not achieve the target of {target_points} LP with the given hotel options using DP.")
+        return [], 0.0, 0
+    
+    # Sort the final itinerary by date for presentation
+    final_itinerary.sort(key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y"))
+
+    return final_itinerary, min_total_cost, achieved_points
 
 
 def fetch_data_for_date(
@@ -367,6 +525,7 @@ def fetch_data_for_date(
     actual_location_name_used: str,
     target_place_id: str,
     session_headers: Dict[str, str],
+    aa_card_bonus: bool = False,  # Added parameter
 ) -> List[Dict[str, Any]]:
     check_in_date_str = current_date.strftime("%m/%d/%Y")
     check_out_date_str = (current_date + timedelta(days=1)).strftime("%m/%d/%Y")
@@ -389,7 +548,10 @@ def fetch_data_for_date(
         )
         if results_data:
             hotel_stays_on_date = analyze_hotel_data(
-                results_data, actual_location_name_used, check_in_date_str
+                results_data,
+                actual_location_name_used,
+                check_in_date_str,
+                aa_card_bonus=aa_card_bonus,  # Pass parameter
             )
         else:
             logging.warning(
@@ -409,6 +571,7 @@ def find_best_hotel_deals(
     session_headers: Dict[str, str],
     target_loyalty_points: int,
     progress_callback: Optional[callable] = None,
+    aa_card_bonus: bool = False,  # Added parameter
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, int]:
     """
     Finds the best hotel deals for a given city and date range.
@@ -419,6 +582,8 @@ def find_best_hotel_deals(
         end_date: The end date for the search.
         session_headers: Headers for authenticated requests.
         target_loyalty_points: The target number of loyalty points for optimization.
+        progress_callback: Optional callback for progress updates.
+        aa_card_bonus: Boolean indicating if AA card bonus should be applied.
 
     Returns:
         A tuple containing:
@@ -488,6 +653,7 @@ def find_best_hotel_deals(
                 actual_location_name_used,
                 target_place_id,
                 session_headers,
+                aa_card_bonus,  # Pass parameter
             ): current_date
             for current_date in date_range
         }
@@ -559,6 +725,11 @@ def main():
         "--headers-file",
         type=str,
         help="Path to a JSON file containing session headers (e.g., cookies, tokens).",
+    )
+    parser.add_argument(
+        "--aa-card-bonus",
+        action="store_true", # Makes it a flag, default False
+        help="Apply 10 extra miles per dollar for AA credit card usage.",
     )
     args = parser.parse_args()
 
@@ -655,7 +826,8 @@ def main():
         end_date=end_date,
         session_headers=final_session_headers,
         target_loyalty_points=args.target_lp, # Use the arg from CLI
-        progress_callback=None # Explicitly None for CLI
+        progress_callback=None, # Explicitly None for CLI
+        aa_card_bonus=args.aa_card_bonus, # Pass CLI flag
     )
 
     if not all_hotel_options_main:

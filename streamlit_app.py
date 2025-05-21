@@ -8,18 +8,25 @@ import streamlit as st
 # Attempt to import from the local package
 try:
     from aa_hotel_optimizer.main import (
-        # discover_phoenix_metro_place_ids, # Not directly used by UI but good to have
         find_best_hotel_deals,
+        parse_curl_command,  # Added import
     )
 except ImportError:
     st.error(
-        "Failed to import 'aa_hotel_optimizer'. Ensure it's installed or accessible in your PYTHONPATH. "
+        "Failed to import from 'aa_hotel_optimizer'. Ensure it's installed or accessible in your PYTHONPATH. "
         "If running from the project root, this should work if the package structure is correct."
     )
+    # Attempt individual imports as a fallback or for more specific error messages
     try:
         from aa_hotel_optimizer.main import find_best_hotel_deals
     except ImportError:
-        st.stop()
+        st.error("Could not import 'find_best_hotel_deals'. App may not function.")
+        st.stop() # Stop if core function is missing
+    try:
+        from aa_hotel_optimizer.main import parse_curl_command
+    except ImportError:
+        st.warning("Could not import 'parse_curl_command'. cURL input will not work.")
+        # Don't stop here, as other auth methods might still work
 
 
 # Default target points, can be overridden by user input
@@ -44,34 +51,78 @@ target_loyalty_points = st.sidebar.number_input(
     "Target Loyalty Points", min_value=0, value=DEFAULT_TARGET_POINTS, step=1000
 )
 
+aa_card_bonus_checkbox = st.sidebar.checkbox(
+    "AA Credit Card Bonus (10 miles/$)",
+    value=False,
+    help="Select if you are using an AAdvantage credit card for an extra 10 miles per dollar spent."
+)
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("Authentication Details")
-cookie_input = st.sidebar.text_area("Cookie String", height=100, help="Paste the full cookie string here.")
-xsrf_token_input = st.sidebar.text_input("XSRF Token", help="Paste the XSRF token here.")
 
-uploaded_headers_file = st.sidebar.file_uploader(
-    "Optional: Upload Session Headers JSON file (Cookie/XSRF token from above will override if provided)", type=["json"]
+auth_method = st.sidebar.radio(
+    "Authentication Method",
+    ("Manual Cookie/XSRF", "cURL Command", "JSON File"),
+    index=0,
+    help="Choose how to provide authentication details. cURL is often easiest if you can copy it from your browser's developer tools."
 )
 
 session_headers: Dict[str, str] = {}
-if uploaded_headers_file is not None:
-    try:
-        session_headers = json.load(uploaded_headers_file)
-        st.sidebar.success("Headers file loaded successfully!")
-    except json.JSONDecodeError:
-        st.sidebar.error("Error decoding JSON from headers file.")
-        session_headers = {} 
-    except Exception as e:
-        st.sidebar.error(f"Error loading headers: {e}")
-        session_headers = {}
+curl_command_input = ""
 
-if cookie_input:
-    session_headers["Cookie"] = cookie_input.strip()
-if xsrf_token_input:
-    session_headers["X-XSRF-TOKEN"] = xsrf_token_input.strip()
+if auth_method == "Manual Cookie/XSRF":
+    cookie_input = st.sidebar.text_area("Cookie String", height=100, help="Paste the full cookie string here.")
+    xsrf_token_input = st.sidebar.text_input("XSRF Token", help="Paste the XSRF token here.")
+    if cookie_input:
+        session_headers["Cookie"] = cookie_input.strip()
+    if xsrf_token_input:
+        session_headers["X-XSRF-TOKEN"] = xsrf_token_input.strip()
+elif auth_method == "cURL Command":
+    curl_command_input = st.sidebar.text_area(
+        "Paste cURL Command",
+        height=200,
+        help="Paste the full cURL command copied from your browser's network tab. This will attempt to parse headers and cookies."
+    )
+    # Parsing will happen when the search button is clicked
+elif auth_method == "JSON File":
+    uploaded_headers_file = st.sidebar.file_uploader(
+        "Upload Session Headers JSON file", type=["json"]
+    )
+    if uploaded_headers_file is not None:
+        try:
+            session_headers = json.load(uploaded_headers_file)
+            st.sidebar.success("Headers file loaded successfully!")
+        except json.JSONDecodeError:
+            st.sidebar.error("Error decoding JSON from headers file.")
+            session_headers = {}
+        except Exception as e:
+            st.sidebar.error(f"Error loading headers: {e}")
+            session_headers = {}
 
 
 if st.sidebar.button("Search for Hotel Deals"):
+    # Process cURL command if that method was selected and input is provided
+    if auth_method == "cURL Command" and curl_command_input:
+        try:
+            parsed_url, parsed_headers = parse_curl_command(curl_command_input)
+            if parsed_headers:
+                session_headers = parsed_headers # Use all headers from cURL
+                st.sidebar.success("cURL command parsed successfully. Using extracted headers.")
+                # Optionally, display some of the parsed headers for confirmation (e.g., User-Agent)
+                # if "User-Agent" in parsed_headers:
+                #     st.sidebar.caption(f"Using User-Agent: {parsed_headers['User-Agent'][:30]}...")
+                if "Cookie" not in parsed_headers:
+                    st.sidebar.warning("Cookie not found in cURL command. Requests might fail.")
+            else:
+                st.sidebar.error("Could not parse headers from cURL command. Please check the format.")
+        except NameError: # If parse_curl_command failed to import
+            st.sidebar.error("cURL parsing function is not available. Cannot process cURL input.")
+        except Exception as e:
+            st.sidebar.error(f"Error parsing cURL command: {e}")
+            # Potentially clear session_headers or revert to a safe state
+            session_headers = {}
+
+
     if not city_query:
         st.error("Please enter a city.")
     elif start_date_input > end_date_input:
@@ -105,6 +156,7 @@ if st.sidebar.button("Search for Hotel Deals"):
                 session_headers=session_headers,
                 target_loyalty_points=target_loyalty_points,
                 progress_callback=streamlit_progress_callback,
+                aa_card_bonus=aa_card_bonus_checkbox, # Pass the checkbox value
             )
             
             progress_bar_placeholder.empty()
