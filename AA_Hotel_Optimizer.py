@@ -122,11 +122,11 @@ with st.expander("How to Use This App & Important Notes", expanded=False):
         """
     )
     st.image(
-        "assets/curl1.png",
+        os.path.join(current_dir, "assets", "curl1.png"),
         caption="Example: Finding the searchRequest in browser developer tools.",
     )
     st.image(
-        "assets/curl.png",
+        os.path.join(current_dir, "assets", "curl.png"),
         caption="Example: Finding the searchRequest in browser developer tools.",
     )
     st.markdown(
