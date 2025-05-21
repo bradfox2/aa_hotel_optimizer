@@ -13,6 +13,7 @@ try:
     altair_available = True
 except ImportError:
     altair_available = False
+    alt = None  # Ensure alt is defined even if import fails
     # This warning will appear in the sidebar if altair is not installed.
     # Consider moving this st.sidebar.warning to a place where sidebar is already defined,
     # or ensure it's called only when the main app flow starts.
@@ -259,58 +260,80 @@ current_lp_balance_input = st.sidebar.number_input(
     key="current_lp_balance_input",
 )
 
-
 if st.sidebar.button("Search for Hotel Deals"):
-    # Process cURL command if that method was selected and input is provided
-    # Use current_auth_method (from st.session_state.auth_method_key)
-    # and curl_command_text_area_content (from st.session_state.curl_command_value via the text_area)
-    if current_auth_method == "cURL Command" and curl_command_text_area_content:
-        try:
-            # Ensure parse_curl_command is available and callable
-            if callable(parse_curl_command):
-                # Use curl_command_text_area_content which holds the input from the text_area
-                parsed_url, parsed_headers = parse_curl_command(
-                    curl_command_text_area_content
-                )
-                if parsed_headers:
-                    session_headers = parsed_headers  # Use all headers from cURL
-                    st.sidebar.success(
-                        "cURL command parsed successfully. Using extracted headers."
-                    )
-                    if "Cookie" not in parsed_headers:
-                        st.sidebar.warning(
-                            "Cookie not found in cURL command. Requests might fail."
-                        )
-                else:
-                    st.sidebar.error(
-                        "Could not parse headers from cURL command. Please check the format."
-                    )
-            else:
-                st.sidebar.error(
-                    "cURL parsing function is not available. Cannot process cURL input."
-                )
-        except Exception as e:  # General exception for parsing logic
-            st.sidebar.error(f"Error parsing cURL command: {e}")
-            session_headers = {}  # Clear headers on error
+    # --- BEGIN: Fetch/Calculate all necessary values from st.session_state ---
+    auth_method_on_click = st.session_state.get("auth_method_key", "cURL Command")
+    curl_content_on_click = st.session_state.get("curl_command_value", "")
+    
+    local_session_headers_for_search: Dict[str, str] = {}
 
-    # Validation for city input
-    if (
-        not city_query_for_backend
-    ):  # Check if any city was resolved to be sent to backend
+    if auth_method_on_click == "cURL Command" and curl_content_on_click:
+        try:
+            if callable(parse_curl_command):
+                parsed_url, parsed_headers_from_curl = parse_curl_command(curl_content_on_click)
+                if parsed_headers_from_curl:
+                    local_session_headers_for_search = parsed_headers_from_curl
+                    st.sidebar.success("cURL command parsed successfully for this search.")
+                    if "Cookie" not in local_session_headers_for_search:
+                        st.sidebar.warning("Cookie not found in cURL command. Requests might fail.")
+                else:
+                    st.sidebar.error("Could not parse headers from cURL command for this search.")
+            else:
+                st.sidebar.error("cURL parsing function is not available.")
+        except Exception as e:
+            st.sidebar.error(f"Error parsing cURL command for this search: {e}")
+            # local_session_headers_for_search remains {}
+    elif auth_method_on_click == "Manual Cookie/XSRF":
+        cookie_val = st.session_state.get("cookie_input_value", "")
+        xsrf_val = st.session_state.get("xsrf_token_input_value", "")
+        if cookie_val:
+            local_session_headers_for_search["Cookie"] = cookie_val.strip()
+        if xsrf_val:
+            local_session_headers_for_search["X-XSRF-TOKEN"] = xsrf_val.strip()
+    elif auth_method_on_click == "JSON File":
+        if "session_headers_from_file" in st.session_state and st.session_state.session_headers_from_file:
+            local_session_headers_for_search = st.session_state.session_headers_from_file
+            # st.sidebar.info("Using stored JSON headers for this search.") # Optional: can be verbose
+
+    # Define optimization_strategy_options locally or ensure it's defined globally before this block
+    # For this refactor, defining locally to ensure self-containment if UI order changes.
+    # However, if this dict is large or used elsewhere, global definition before button is better.
+    # Given it's already defined globally later, we can rely on that, but for robustness if UI order changes:
+    optimization_strategy_options_config = {
+        "Maximize Points per Dollar (Greedy PPD)": "points_per_dollar",
+        "Minimize Cost for Target LP (Greedy Cheapest Stays)": "minimize_cost_for_target_lp",
+        "Minimize Cost for Target LP (Dynamic Programming)": "dp_minimize_cost",
+        "Fastest Calendar Time to Target LP (Overlaps OK)": "fastest_calendar_time_lp",
+    }
+    selected_strategy_key_on_click = st.session_state.get("selected_strategy_display_key", list(optimization_strategy_options_config.keys())[0])
+    optimization_strategy_on_click = optimization_strategy_options_config[selected_strategy_key_on_click]
+
+    max_overlaps_on_click = 5  # Default
+    if optimization_strategy_on_click == "fastest_calendar_time_lp":
+        max_overlaps_on_click = st.session_state.get("max_concurrent_overlaps_input", 5)
+        
+    iterative_search_on_click = st.session_state.get("iterative_search_checkbox", False)
+    
+    miles_cents_on_click = st.session_state.get("miles_value_cents_input", 1.5)
+    miles_rate_on_click = miles_cents_on_click / 100.0
+    # --- END: Fetch/Calculate all necessary values from st.session_state ---
+
+    # Validation for city input (uses globally defined city_query_for_backend, start_date_input, etc.)
+    if not city_query_for_backend:
         if search_type == "Specific Location(s)":
             st.error("Please enter a city for 'Specific Location(s)' search.")
         elif search_type == "Broad Points Optimization":
-            st.error(
-                "Please select a region or enter custom cities for 'Broad Points Optimization'."
-            )
-        st.stop()  # Stop execution if no city input is valid
+            st.error("Please select a region or enter custom cities for 'Broad Points Optimization'.")
+        st.stop()
     elif start_date_input > end_date_input:
         st.error("Start date cannot be after end date.")
+        st.stop()
     else:
         progress_bar_placeholder = st.empty()
         status_text_placeholder = st.empty()
 
         # Updated progress callback for multi-city and iterative search feedback
+        # It now uses iterative_search_on_click
         def streamlit_progress_callback(
             completed_dates_in_city: int,
             total_dates_in_city: int,
@@ -325,130 +348,67 @@ if st.sidebar.button("Search for Hotel Deals"):
             progress = 0.0
             if total_dates_in_city > 0:
                 progress = completed_dates_in_city / total_dates_in_city
-
             progress_bar_placeholder.progress(progress)
-
             msg_parts = []
-            if current_pass is not None:
-                msg_parts.append(f"Pass {current_pass}")
-            if (
-                total_cities
-                and total_cities > 1
-                and current_city_idx is not None
-                and current_city_name
-            ):
-                msg_parts.append(
-                    f"City {current_city_idx}/{total_cities} ('{current_city_name}')"
-                )
-
-            if total_dates_in_city > 0:
-                msg_parts.append(
-                    f"Processed {completed_dates_in_city}/{total_dates_in_city} dates"
-                )
-
-            if pass_end_date:
-                msg_parts.append(f"(window up to {pass_end_date})")
-
-            if status_message:  # For specific messages like "Place ID not found", "Target Met", "Extending Search"
-                msg_parts.append(f"- {status_message}")
-            elif iterative_search_checkbox and is_final_city_in_pass:
-                msg_parts.append(
-                    "Pass complete."
-                )  # Backend will log/handle if extending search
-            elif (
-                iterative_search_checkbox
-            ):  # Implies not final_city_in_pass, or still processing current pass
-                msg_parts.append("Searching...")
-            # If not iterative_search_checkbox, the message parts for city/date processing are usually enough.
-
+            if current_pass is not None: msg_parts.append(f"Pass {current_pass}")
+            if total_cities and total_cities > 1 and current_city_idx is not None and current_city_name:
+                msg_parts.append(f"City {current_city_idx}/{total_cities} ('{current_city_name}')")
+            if total_dates_in_city > 0: msg_parts.append(f"Processed {completed_dates_in_city}/{total_dates_in_city} dates")
+            if pass_end_date: msg_parts.append(f"(window up to {pass_end_date})")
+            if status_message: msg_parts.append(f"- {status_message}")
+            elif iterative_search_on_click and is_final_city_in_pass: msg_parts.append("Pass complete.")
+            elif iterative_search_on_click: msg_parts.append("Searching...")
             status_text_placeholder.text(" | ".join(msg_parts))
 
-        # Define styling function here to ensure it's in scope
         def style_ppd_column(df, column_name="points_per_dollar"):
-            if (
-                column_name in df.columns
-                and pd.api.types.is_numeric_dtype(df[column_name])
-                and not df[column_name].empty
-            ):
+            if column_name in df.columns and pd.api.types.is_numeric_dtype(df[column_name]) and not df[column_name].empty:
                 if df[column_name].count() > 0:
-                    return df.style.background_gradient(
-                        subset=[column_name], cmap="Greens", low=0.1, high=1.0
-                    )
-            return df  # Return unstyled df if column not suitable or empty
+                    return df.style.background_gradient(subset=[column_name], cmap="Greens", low=0.1, high=1.0)
+            return df
 
-        status_text_placeholder.text(
-            f"Initiating search for: {city_query_for_backend}..."
-        )
-        if (
-            search_type == "Broad Points Optimization"
-            and len(cities_to_process_log) > 1
-        ):
-            status_text_placeholder.text(
-                f"Initiating search for {city_query_for_backend} (first of {len(cities_to_process_log)} cities). Full multi-city backend processing is pending."
-            )
+        status_text_placeholder.text(f"Initiating search for: {city_query_for_backend}...")
+        if search_type == "Broad Points Optimization" and len(cities_to_process_log) > 1:
+            status_text_placeholder.text(f"Initiating search for {city_query_for_backend} (first of {len(cities_to_process_log)} cities). Full multi-city backend processing is pending.")
 
         try:
             progress_bar_placeholder.progress(0)
-            # Ensure find_best_hotel_deals is available and callable
             if not callable(find_best_hotel_deals):
-                st.error(
-                    "Core search function 'find_best_hotel_deals' is not available. App cannot proceed."
-                )
+                st.error("Core search function 'find_best_hotel_deals' is not available. App cannot proceed.")
                 st.stop()
 
-            # TODO: When backend supports List[str] for cities, pass cities_to_process_log directly.
-            # For now, we pass city_query_for_backend which is cities_to_process_log[0] or the single specific city.
-            all_hotel_options, final_itinerary, total_cost, total_points_earned = (
-                find_best_hotel_deals(
-                    city_queries=cities_to_process_log,  # Pass the full list of cities
-                    start_date=start_date_input,
-                    end_date=end_date_input,
-                    session_headers=session_headers,
-                    target_loyalty_points=target_loyalty_points,
-                    progress_callback=streamlit_progress_callback,
-                    aa_card_bonus=aa_card_bonus_checkbox,
-                    aa_card_miles_rate=aa_card_miles_rate_input,
-                    optimization_strategy=optimization_strategy_value,
-                    iterative_search_for_lp_target=iterative_search_checkbox,
-                    # max_search_days_iterative=max_search_days_input, # If we add this input
-                    current_lp_balance=current_lp_balance_input,  # Pass current LP balance
-                    max_overlaps=(
-                        max_concurrent_overlaps
-                        if optimization_strategy_value == "fastest_calendar_time_lp"
-                        else None
-                    ),
-                    miles_value_rate=miles_value_rate_for_backend,  # Pass the new rate
-                )
+            all_hotel_options, final_itinerary, total_cost, total_points_earned = find_best_hotel_deals(
+                city_queries=cities_to_process_log,
+                start_date=start_date_input,
+                end_date=end_date_input,
+                session_headers=local_session_headers_for_search, # Use locally prepared headers
+                target_loyalty_points=target_loyalty_points,
+                progress_callback=streamlit_progress_callback,
+                aa_card_bonus=aa_card_bonus_checkbox,
+                aa_card_miles_rate=aa_card_miles_rate_input,
+                optimization_strategy=optimization_strategy_on_click, # Use fetched value
+                iterative_search_for_lp_target=iterative_search_on_click, # Use fetched value
+                current_lp_balance=current_lp_balance_input,
+                max_overlaps=(
+                    max_overlaps_on_click # Use fetched value
+                    if optimization_strategy_on_click == "fastest_calendar_time_lp"
+                    else None
+                ),
+                miles_value_rate=miles_rate_on_click, # Use fetched value
             )
 
             progress_bar_placeholder.empty()
             status_text_placeholder.empty()
 
-            st.subheader("Optimal Loyalty Points Strategy")  # Moved this subheader up
+            st.subheader("Optimal Loyalty Points Strategy")
             if final_itinerary:
-                # Calculate total miles and value for the itinerary
-                total_miles_earned_itinerary = sum(
-                    s.get("miles_earned", 0) for s in final_itinerary
-                )
-                total_miles_value_itinerary = sum(
-                    s.get("miles_value", 0.0) for s in final_itinerary
-                )
-
-                # Use 6 columns for metrics now
+                total_miles_earned_itinerary = sum(s.get("miles_earned", 0) for s in final_itinerary)
+                total_miles_value_itinerary = sum(s.get("miles_value", 0.0) for s in final_itinerary)
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 col1.metric("Target LP", f"{target_loyalty_points:,}")
                 col2.metric("Achieved LP", f"{total_points_earned:,}")
                 col3.metric("Total Cost", f"${total_cost:,.2f}")
-
-                # Calculate Overall PPD based on net new LPs from itinerary vs cost
-                net_new_lp_from_itinerary = (
-                    total_points_earned - current_lp_balance_input
-                )
-                overall_ppd = (
-                    (net_new_lp_from_itinerary / total_cost)
-                    if total_cost > 0 and net_new_lp_from_itinerary > 0
-                    else 0
-                )
+                net_new_lp_from_itinerary = total_points_earned - current_lp_balance_input
+                overall_ppd = (net_new_lp_from_itinerary / total_cost) if total_cost > 0 and net_new_lp_from_itinerary > 0 else 0
                 col4.metric("Overall LP PPD", f"{overall_ppd:.2f}")
                 col5.metric("Total Miles Earned", f"{total_miles_earned_itinerary:,}")
                 col6.metric("Total Miles Value", f"${total_miles_value_itinerary:,.2f}")
@@ -456,376 +416,135 @@ if st.sidebar.button("Search for Hotel Deals"):
                 st.markdown("---")
                 st.write("Itinerary Details:")
                 df_itinerary = pd.DataFrame(final_itinerary)
-                # Updated columns to show detailed point breakdown
                 display_cols_itinerary = [
-                    "name",
-                    "location",
-                    "check_in_date",
-                    "total_price",
-                    "api_points_earned",
-                    "card_bonus_points",
-                    "status_bonus_points",
-                    "points_earned_final_for_itinerary",
-                    "points_per_dollar_final_for_itinerary",
-                    "miles_earned",  # Added
-                    "miles_value",  # Added
+                    "name", "location", "check_in_date", "total_price", "api_points_earned",
+                    "card_bonus_points", "status_bonus_points", "points_earned_final_for_itinerary",
+                    "points_per_dollar_final_for_itinerary", "miles_earned", "miles_value",
                 ]
-                df_itinerary_display = df_itinerary[
-                    [
-                        col
-                        for col in display_cols_itinerary
-                        if col in df_itinerary.columns
-                    ]
-                ].copy()
-
-                # Updated column configurations for the new detailed view
+                df_itinerary_display = df_itinerary[[col for col in display_cols_itinerary if col in df_itinerary.columns]].copy()
                 column_config_itinerary = {
-                    "name": st.column_config.TextColumn("Hotel Name", width="large"),
-                    "location": "Location",
-                    "check_in_date": "Check-in",
-                    "total_price": st.column_config.NumberColumn(
-                        "Price", format="$%.2f"
-                    ),
-                    "api_points_earned": st.column_config.NumberColumn(
-                        "API Points",
-                        format="%d",
-                        help="Base points from the hotel booking.",
-                    ),
-                    "card_bonus_points": st.column_config.NumberColumn(
-                        "Card Bonus",
-                        format="%d",
-                        help="Points from AA credit card (10 miles/$).",
-                    ),
-                    "status_bonus_points": st.column_config.NumberColumn(
-                        "Status Bonus",
-                        format="%d",
-                        help="Points from AAdvantage status bonus.",
-                    ),
-                    "points_earned_final_for_itinerary": st.column_config.NumberColumn(
-                        "Total Stay LP",
-                        format="%d",
-                        help="Total Loyalty Points for this stay (API + Card + Status).",
-                    ),
-                    "points_per_dollar_final_for_itinerary": st.column_config.NumberColumn(
-                        "Stay LP PPD",  # Renamed for clarity
-                        format="%.2f",
-                        help="Total Loyalty Points / Price for this stay.",
-                    ),
-                    "miles_earned": st.column_config.NumberColumn(
-                        "Miles Earned",
-                        format="%d",
-                        help="Total miles earned for this stay (LPs + spend miles if card used).",
-                    ),
-                    "miles_value": st.column_config.NumberColumn(
-                        "Miles Value ($)",
-                        format="$%.2f",
-                        help="Value of miles earned for this stay (at $0.015/mile).",
-                    ),
+                    "name": st.column_config.TextColumn("Hotel Name", width="large"), "location": "Location",
+                    "check_in_date": "Check-in", "total_price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "api_points_earned": st.column_config.NumberColumn("API Points", format="%d", help="Base points from the hotel booking."),
+                    "card_bonus_points": st.column_config.NumberColumn("Card Bonus", format="%d", help="Points from AA credit card (10 miles/$)."),
+                    "status_bonus_points": st.column_config.NumberColumn("Status Bonus", format="%d", help="Points from AAdvantage status bonus."),
+                    "points_earned_final_for_itinerary": st.column_config.NumberColumn("Total Stay LP", format="%d", help="Total Loyalty Points for this stay (API + Card + Status)."),
+                    "points_per_dollar_final_for_itinerary": st.column_config.NumberColumn("Stay LP PPD", format="%.2f", help="Total Loyalty Points / Price for this stay."),
+                    "miles_earned": st.column_config.NumberColumn("Miles Earned", format="%d", help="Total miles earned for this stay (LPs + spend miles if card used)."),
+                    "miles_value": st.column_config.NumberColumn("Miles Value ($)", format="$%.2f", help="Value of miles earned for this stay (at $0.015/mile)."),
                 }
-                active_column_config_itinerary = {
-                    k: v
-                    for k, v in column_config_itinerary.items()
-                    if k in df_itinerary_display.columns
-                }
-
-                # Style based on the final PPD for the itinerary
-                styled_df_itinerary = style_ppd_column(
-                    df_itinerary_display,
-                    column_name="points_per_dollar_final_for_itinerary",
-                )
-                st.dataframe(
-                    styled_df_itinerary, column_config=active_column_config_itinerary
-                )
+                active_column_config_itinerary = {k: v for k, v in column_config_itinerary.items() if k in df_itinerary_display.columns}
+                styled_df_itinerary = style_ppd_column(df_itinerary_display, column_name="points_per_dollar_final_for_itinerary")
+                st.dataframe(styled_df_itinerary, column_config=active_column_config_itinerary)
             else:
-                st.write(
-                    f"Could not form an itinerary to meet the target of {target_loyalty_points} points from the found options."
-                )
+                st.write(f"Could not form an itinerary to meet the target of {target_loyalty_points} points from the found options.")
 
             st.subheader("All Hotel Options Found")
             if all_hotel_options:
                 df_all_options = pd.DataFrame(all_hotel_options)
-                # Updated columns to show more point details available at this stage
                 display_cols_all = [
-                    "name",
-                    "location",
-                    "check_in_date",
-                    "total_price",
-                    "api_points_earned",
-                    "card_bonus_points",  # Added
-                    "points_earned",  # This is api_points + card_bonus
-                    "points_per_dollar",  # Based on api_points + card_bonus
-                    "miles_earned",  # Added for all options table
-                    "miles_value",  # Added for all options table
-                    "refundability",
-                    "star_rating",
-                    "user_rating",
+                    "name", "location", "check_in_date", "total_price", "api_points_earned",
+                    "card_bonus_points", "points_earned", "points_per_dollar", "miles_earned",
+                    "miles_value", "refundability", "star_rating", "user_rating",
                 ]
-                df_all_options_display = df_all_options[
-                    [
-                        col for col in display_cols_all if col in df_all_options.columns
-                    ]  # Ensure only existing cols are selected
-                ].copy()
-
+                df_all_options_display = df_all_options[[col for col in display_cols_all if col in df_all_options.columns]].copy()
                 if "refundability" in df_all_options_display.columns:
-                    df_all_options_display.loc[:, "refundability"] = (
-                        df_all_options_display["refundability"].apply(
-                            lambda x: "✅ Refundable"
-                            if x == "REFUNDABLE"
-                            else (
-                                "❌ Non-Refundable"
-                                if x == "NON_REFUNDABLE"
-                                else "❓ Unknown"
-                            )
-                        )
+                    df_all_options_display.loc[:, "refundability"] = df_all_options_display["refundability"].apply(
+                        lambda x: "✅ Refundable" if x == "REFUNDABLE" else ("❌ Non-Refundable" if x == "NON_REFUNDABLE" else "❓ Unknown")
                     )
                 if "star_rating" in df_all_options_display.columns:
-                    df_all_options_display.loc[:, "star_rating_display"] = (
-                        df_all_options_display["star_rating"].apply(
-                            lambda x: f"{x:.1f} ⭐" if pd.notna(x) and x > 0 else "N/A"
-                        )
+                    df_all_options_display.loc[:, "star_rating_display"] = df_all_options_display["star_rating"].apply(
+                        lambda x: f"{x:.1f} ⭐" if pd.notna(x) and x > 0 else "N/A"
                     )
-                    display_cols_all = [
-                        col if col != "star_rating" else "star_rating_display"
-                        for col in display_cols_all
-                    ]
-
-                final_display_cols_all = [
-                    col
-                    for col in display_cols_all
-                    if col in df_all_options_display.columns
-                ]
-
-                if (
-                    "points_per_dollar" in df_all_options_display.columns
-                    and pd.api.types.is_numeric_dtype(
-                        df_all_options_display["points_per_dollar"]
-                    )
-                ):
-                    df_all_options_display = df_all_options_display.sort_values(
-                        by=["points_per_dollar"], ascending=False
-                    )
-
+                    display_cols_all = [col if col != "star_rating" else "star_rating_display" for col in display_cols_all]
+                final_display_cols_all = [col for col in display_cols_all if col in df_all_options_display.columns]
+                if "points_per_dollar" in df_all_options_display.columns and pd.api.types.is_numeric_dtype(df_all_options_display["points_per_dollar"]):
+                    df_all_options_display = df_all_options_display.sort_values(by=["points_per_dollar"], ascending=False)
+                
                 column_config_all = {
-                    "name": st.column_config.TextColumn("Hotel Name", width="large"),
-                    "location": "Location",
-                    "check_in_date": "Check-in",
-                    "total_price": st.column_config.NumberColumn(
-                        "Price", format="$%.2f"
-                    ),
-                    "api_points_earned": st.column_config.NumberColumn(
-                        "API Points",
-                        format="%d",
-                        help="Base points from the hotel booking.",
-                    ),
-                    "card_bonus_points": st.column_config.NumberColumn(
-                        "Card Bonus",
-                        format="%d",
-                        help="Points from AA credit card (10 miles/$).",
-                    ),
-                    "points_earned": st.column_config.NumberColumn(
-                        "Base+Card LP",
-                        format="%d",
-                        help="API Points + Card Bonus. Status bonus is applied during itinerary selection.",
-                    ),
-                    "points_per_dollar": st.column_config.NumberColumn(
-                        "Base+Card LP PPD",  # Renamed for clarity
-                        format="%.2f",
-                        help="PPD based on API Points + Card Bonus (LPs only).",
-                    ),
-                    "miles_earned": st.column_config.NumberColumn(
-                        "Miles Earned (Stay)",
-                        format="%d",
-                        help="Total miles for this stay (LPs + spend miles if card used), reflects final calculation.",
-                    ),
-                    "miles_value": st.column_config.NumberColumn(
-                        "Miles Value (Stay, $)",
-                        format="$%.2f",
-                        help="Value of miles for this stay (at $0.015/mile), reflects final calculation.",
-                    ),
-                    "refundability": "Refundable",
-                    "star_rating_display": st.column_config.TextColumn("Stars"),
-                    "user_rating": st.column_config.NumberColumn(
-                        "Rating", format="%.1f"
-                    ),
+                    "name": st.column_config.TextColumn("Hotel Name", width="large"), "location": "Location",
+                    "check_in_date": "Check-in", "total_price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "api_points_earned": st.column_config.NumberColumn("API Points", format="%d", help="Base points from the hotel booking."),
+                    "card_bonus_points": st.column_config.NumberColumn("Card Bonus", format="%d", help="Points from AA credit card (10 miles/$)."),
+                    "points_earned": st.column_config.NumberColumn("Base+Card LP", format="%d", help="API Points + Card Bonus. Status bonus is applied during itinerary selection."),
+                    "points_per_dollar": st.column_config.NumberColumn("Base+Card LP PPD", format="%.2f", help="PPD based on API Points + Card Bonus (LPs only)."),
+                    "miles_earned": st.column_config.NumberColumn("Miles Earned (Stay)", format="%d", help="Total miles for this stay (LPs + spend miles if card used), reflects final calculation."),
+                    "miles_value": st.column_config.NumberColumn("Miles Value (Stay, $)", format="$%.2f", help="Value of miles for this stay (at $0.015/mile), reflects final calculation."),
+                    "refundability": "Refundable", "star_rating_display": st.column_config.TextColumn("Stars"),
+                    "user_rating": st.column_config.NumberColumn("Rating", format="%.1f"),
                 }
-                active_column_config_all = {
-                    k: v
-                    for k, v in column_config_all.items()
-                    if k in final_display_cols_all
-                }
-
-                styled_df_all_options = style_ppd_column(
-                    df_all_options_display[final_display_cols_all]
-                )
-                st.dataframe(
-                    styled_df_all_options, column_config=active_column_config_all
-                )
+                active_column_config_all = {k: v for k, v in column_config_all.items() if k in final_display_cols_all}
+                styled_df_all_options = style_ppd_column(df_all_options_display[final_display_cols_all])
+                st.dataframe(styled_df_all_options, column_config=active_column_config_all)
 
                 st.markdown("---")
                 st.subheader("Visualizations for All Hotel Options")
                 col1, col2 = st.columns(2)
                 with col1:
-                    if (
-                        "points_per_dollar" in df_all_options_display.columns
-                        and not df_all_options_display["points_per_dollar"].empty
-                    ):
+                    if "points_per_dollar" in df_all_options_display.columns and not df_all_options_display["points_per_dollar"].empty:
                         st.write("Distribution of Points per Dollar")
-                        st.bar_chart(
-                            df_all_options_display["points_per_dollar"]
-                            .value_counts()
-                            .sort_index()
-                        )
+                        st.bar_chart(df_all_options_display["points_per_dollar"].value_counts().sort_index())
                     else:
                         st.write("Points per Dollar data not available for histogram.")
                 with col2:
-                    if (
-                        "total_price" in df_all_options_display.columns
-                        and "points_per_dollar" in df_all_options_display.columns
-                        and not df_all_options_display[
-                            ["total_price", "points_per_dollar"]
-                        ].empty
-                    ):
+                    if "total_price" in df_all_options_display.columns and "points_per_dollar" in df_all_options_display.columns and not df_all_options_display[["total_price", "points_per_dollar"]].empty:
                         st.write("Price vs. Points per Dollar (PPD)")
-                        # Using 'points_per_dollar' which is Base+Card PPD for this table
-                        scatter_df = df_all_options_display[
-                            ["total_price", "points_per_dollar"]
-                        ].copy()
+                        scatter_df = df_all_options_display[["total_price", "points_per_dollar"]].copy()
                         scatter_df.columns = ["Total Price ($)", "Base+Card PPD"]
-                        st.scatter_chart(
-                            scatter_df, x="Total Price ($)", y="Base+Card PPD"
-                        )
+                        st.scatter_chart(scatter_df, x="Total Price ($)", y="Base+Card PPD")
                     else:
                         st.write("Price/PPD data not available for scatter plot.")
                 st.markdown("---")
 
-                # Additional Visualizations for distributions
                 st.subheader("Additional Data Distributions")
-
-                # Helper function for histograms
-                def plot_histogram(
-                    df_plot, col_name, chart_title, x_label, altair_is_available
-                ):
-                    if (
-                        col_name in df_plot.columns
-                        and not df_plot[col_name].empty
-                        and df_plot[col_name].count() > 0
-                    ):
+                def plot_histogram(df_plot, col_name, chart_title, x_label, altair_is_available_param): # Renamed altair_is_available to avoid conflict
+                    if col_name in df_plot.columns and not df_plot[col_name].empty and df_plot[col_name].count() > 0:
                         st.write(chart_title)
-                        data_for_plot = df_plot[
-                            [col_name]
-                        ].dropna()  # Ensure we use a DataFrame slice
+                        data_for_plot = df_plot[[col_name]].dropna()
                         if data_for_plot.empty:
-                            st.write(
-                                f"No valid data for {chart_title} after dropping NaNs."
-                            )
+                            st.write(f"No valid data for {chart_title} after dropping NaNs.")
                             return
-
-                        if altair_is_available:
+                        if altair_is_available_param and alt is not None: # Use the parameter
                             try:
-                                hist_chart = (
-                                    alt.Chart(data_for_plot)
-                                    .mark_bar()
-                                    .encode(
-                                        alt.X(
-                                            f"{col_name}:Q",
-                                            bin=alt.Bin(maxbins=20),
-                                            title=x_label,
-                                        ),
-                                        alt.Y("count()", title="Number of Hotels"),
-                                    )
-                                    .properties(
-                                        # title=chart_title # Title is already displayed by st.write
-                                    )
-                                )
+                                hist_chart = alt.Chart(data_for_plot).mark_bar().encode(
+                                    alt.X(f"{col_name}:Q", bin=alt.Bin(maxbins=20), title=x_label),
+                                    alt.Y("count()", title="Number of Hotels")
+                                ).properties()
                                 st.altair_chart(hist_chart, use_container_width=True)
                             except Exception as ex:
-                                st.write(
-                                    f"Could not generate Altair chart for {chart_title}: {ex}. Falling back."
-                                )
-                                value_counts_data = (
-                                    data_for_plot[col_name].value_counts().sort_index()
-                                )
-                                if not value_counts_data.empty:
-                                    st.bar_chart(value_counts_data)
-                                else:
-                                    st.write(
-                                        f"No data to plot with fallback for {chart_title}."
-                                    )
-                        else:  # Altair not available
-                            value_counts_data = (
-                                data_for_plot[col_name].value_counts().sort_index()
-                            )
-                            if not value_counts_data.empty:
-                                st.bar_chart(value_counts_data)
-                            else:
-                                st.write(
-                                    f"No data to plot with st.bar_chart for {chart_title}."
-                                )
+                                st.write(f"Could not generate Altair chart for {chart_title}: {ex}. Falling back.")
+                                value_counts_data = data_for_plot[col_name].value_counts().sort_index()
+                                if not value_counts_data.empty: st.bar_chart(value_counts_data)
+                                else: st.write(f"No data to plot with fallback for {chart_title}.")
+                        else:
+                            value_counts_data = data_for_plot[col_name].value_counts().sort_index()
+                            if not value_counts_data.empty: st.bar_chart(value_counts_data)
+                            else: st.write(f"No data to plot with st.bar_chart for {chart_title}.")
                     else:
-                        st.write(
-                            f"{chart_title} data not available or empty in the dataset."
-                        )
+                        st.write(f"{chart_title} data not available or empty in the dataset.")
 
-                # Create columns for the new histograms
                 viz_col1, viz_col2, viz_col3 = st.columns(3)
-
                 with viz_col1:
-                    plot_histogram(
-                        df_all_options_display,
-                        "total_price",
-                        "Distribution of Total Price",
-                        "Total Price ($)",
-                        altair_available,
-                    )
-
+                    plot_histogram(df_all_options_display, "total_price", "Distribution of Total Price", "Total Price ($)", altair_available) # Pass global altair_available
                 with viz_col2:
-                    # Ensure 'user_rating' is numeric. If it might have non-numeric placeholders, convert it.
-                    # Assuming 'user_rating' from df_all_options is already numeric as per its column_config.
-                    # Add a defensive conversion if needed.
                     temp_df_ratings = df_all_options_display.copy()
                     if "user_rating" in temp_df_ratings.columns:
-                        temp_df_ratings["user_rating_numeric"] = pd.to_numeric(
-                            temp_df_ratings["user_rating"], errors="coerce"
-                        )
-                        plot_histogram(
-                            temp_df_ratings,
-                            "user_rating_numeric",
-                            "Distribution of User Rating",
-                            "User Rating",
-                            altair_available,
-                        )
+                        temp_df_ratings["user_rating_numeric"] = pd.to_numeric(temp_df_ratings["user_rating"], errors="coerce")
+                        plot_histogram(temp_df_ratings, "user_rating_numeric", "Distribution of User Rating", "User Rating", altair_available) # Pass global altair_available
                     else:
                         st.write("User Rating data not available.")
-
                 with viz_col3:
-                    # 'star_rating' should be the original numeric column.
-                    # 'star_rating_display' is the string version with emoji.
-                    plot_histogram(
-                        df_all_options_display,
-                        "star_rating",
-                        "Distribution of Star Rating",
-                        "Star Rating (Numeric)",
-                        altair_available,
-                    )
-
-                st.markdown("---")  # Separator after the new charts
-
+                    plot_histogram(df_all_options_display, "star_rating", "Distribution of Star Rating", "Star Rating (Numeric)", altair_available) # Pass global altair_available
+                st.markdown("---")
             else:
                 st.write("No hotel options found for the given criteria.")
-
-            # This subheader was moved up to be before the itinerary metrics and details
-            # st.subheader("Optimal Loyalty Points Strategy")
-
         except Exception as e:
             progress_bar_placeholder.empty()
             status_text_placeholder.empty()
             st.error(f"An error occurred during the search: {e}")
             st.exception(e)
 else:
-    st.info(
-        "Enter search parameters in the sidebar and click 'Search for Hotel Deals'."
-    )
-
+    st.info("Enter search parameters in the sidebar and click 'Search for Hotel Deals'.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Authentication Details")
@@ -932,9 +651,7 @@ elif current_auth_method == "JSON File":
             st.session_state.session_headers_from_file = {}
             session_headers = {}  # Clear for current run too
 
-
-
-
+st.sidebar.markdown("---")
 st.sidebar.subheader("Optimization Strategy")
 optimization_strategy_options = {
     "Maximize Points per Dollar (Greedy PPD)": "points_per_dollar",
