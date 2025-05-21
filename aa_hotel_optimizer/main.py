@@ -473,13 +473,17 @@ def find_best_hotel_deals(
 
 
 def main():
-    TARGET_LOYALTY_POINTS = 250000 # Default target
-
     parser = argparse.ArgumentParser(
         description="Scrape AAdvantage Hotels for high points-per-dollar stays. Can also be used as a library."
     )
     parser.add_argument(
         "city", type=str, help="The city to search for hotels (e.g., 'Phoenix')"
+    )
+    parser.add_argument(
+        "--target-lp",
+        type=int,
+        default=125000, # Default to Platinum Pro
+        help="Target AAdvantage Loyalty Points (LP) to achieve (e.g., 125000 for Plat Pro, 250000 for EP). Default: 125000.",
     )
     parser.add_argument(
         "--start-date", # Changed to an optional argument
@@ -610,16 +614,17 @@ def main():
         print_hotel_values_summary(all_hotel_options) # To stdout via results_logger
 
         # Optimization logic
+        target_loyalty_points_from_arg = args.target_lp
         logging.info(
-            f"\nOptimizing for {TARGET_LOYALTY_POINTS} loyalty points..."
+            f"\nOptimizing for {target_loyalty_points_from_arg} loyalty points..."
         ) # To stderr
         final_itinerary, total_cost, total_points_earned = select_optimal_stays(
-            all_hotel_options, TARGET_LOYALTY_POINTS
+            all_hotel_options, target_loyalty_points_from_arg
         )
         if final_itinerary:
             logging.info("\n===== Optimal Loyalty Points Strategy (Details below on stdout) =====") # To stderr
             results_logger.info("\n===== Optimal Loyalty Points Strategy =====") # To stdout
-            results_logger.info(f"Target Loyalty Points: {TARGET_LOYALTY_POINTS}")
+            results_logger.info(f"Target Loyalty Points: {target_loyalty_points_from_arg}")
             results_logger.info(f"Achieved Loyalty Points: {total_points_earned}")
             results_logger.info(f"Total Cost: ${total_cost:.2f}")
             if total_cost > 0:
@@ -640,10 +645,10 @@ def main():
                 )
         else:
             logging.info( # To stderr
-                f"Could not form an itinerary from the results to meet target {TARGET_LOYALTY_POINTS} points."
+                f"Could not form an itinerary from the results to meet target {target_loyalty_points_from_arg} points."
             )
             results_logger.info( # To stdout
-                f"Could not form an itinerary from the results to meet target {TARGET_LOYALTY_POINTS} points."
+                f"Could not form an itinerary from the results to meet target {target_loyalty_points_from_arg} points."
             )
 
     logging.info("\n--- Search Complete ---") # To stderr

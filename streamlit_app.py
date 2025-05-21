@@ -54,8 +54,13 @@ target_loyalty_points = st.sidebar.number_input(
     "Target Loyalty Points", min_value=0, value=DEFAULT_TARGET_POINTS, step=1000
 )
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("Authentication Details")
+cookie_input = st.sidebar.text_area("Cookie String", height=100, help="Paste the full cookie string here.")
+xsrf_token_input = st.sidebar.text_input("XSRF Token", help="Paste the XSRF token here.")
+
 uploaded_headers_file = st.sidebar.file_uploader(
-    "Optional: Upload Session Headers JSON file", type=["json"]
+    "Optional: Upload Session Headers JSON file (Cookie/XSRF token from above will override if provided)", type=["json"]
 )
 
 session_headers: Dict[str, str] = {}
@@ -65,8 +70,17 @@ if uploaded_headers_file is not None:
         st.sidebar.success("Headers file loaded successfully!")
     except json.JSONDecodeError:
         st.sidebar.error("Error decoding JSON from headers file.")
+        session_headers = {} # Reset on error
     except Exception as e:
         st.sidebar.error(f"Error loading headers: {e}")
+        session_headers = {} # Reset on error
+
+# Override or set Cookie and XSRF token from direct input if provided
+if cookie_input:
+    session_headers["Cookie"] = cookie_input.strip()
+if xsrf_token_input:
+    session_headers["X-XSRF-TOKEN"] = xsrf_token_input.strip()
+
 
 if st.sidebar.button("Search for Hotel Deals"):
     if not city_query:
@@ -152,4 +166,4 @@ else:
     st.info("Enter search parameters in the sidebar and click 'Search for Hotel Deals'.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("Developed by Cline.")
+st.sidebar.markdown("Feel the VIBES")
