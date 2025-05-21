@@ -58,6 +58,26 @@ aa_card_bonus_checkbox = st.sidebar.checkbox(
 )
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Optimization Strategy")
+optimization_strategy_options = {
+    "Maximize Points per Dollar (Greedy PPD)": "points_per_dollar",
+    "Minimize Cost for Target LP (Greedy Cheapest Stays)": "minimize_cost_for_target_lp",
+    "Minimize Cost for Target LP (Dynamic Programming)": "dp_minimize_cost",
+}
+selected_strategy_display = st.sidebar.radio(
+    "Choose Optimization Method:",
+    options=list(optimization_strategy_options.keys()),
+    index=0, # Default to PPD
+    help=(
+        "Maximize PPD: Good for general high-value stays.\n"
+        "Minimize Cost (Greedy): Finds the cheapest stays to hit LP target quickly.\n"
+        "Minimize Cost (DP): More thorough, aims for true minimum cost to hit LP target (can be slower)."
+    )
+)
+optimization_strategy_value = optimization_strategy_options[selected_strategy_display]
+
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("Authentication Details")
 
 auth_method = st.sidebar.radio(
@@ -156,7 +176,8 @@ if st.sidebar.button("Search for Hotel Deals"):
                 session_headers=session_headers,
                 target_loyalty_points=target_loyalty_points,
                 progress_callback=streamlit_progress_callback,
-                aa_card_bonus=aa_card_bonus_checkbox, # Pass the checkbox value
+                aa_card_bonus=aa_card_bonus_checkbox,
+                optimization_strategy=optimization_strategy_value, # Pass selected strategy
             )
             
             progress_bar_placeholder.empty()

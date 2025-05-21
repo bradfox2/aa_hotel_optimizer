@@ -417,6 +417,144 @@ def select_optimal_stays(
     all_stays: List[Dict[str, Any]], target_points: int
 ) -> Tuple[List[Dict[str, Any]], float, int]:
     """
+    Original strategy: Selects hotel stays by prioritizing the highest points_per_dollar,
+    ensuring each date is booked only once, until the target loyalty points are met.
+    """
+    # Filter for stays that actually earn points
+    candidate_stays = [stay for stay in all_stays if stay.get("points_earned", 0) > 0]
+
+    if not candidate_stays:
+        return [], 0.0, 0
+
+    # Sort by points_per_dollar (desc), then by total_price (asc for tie-breaking cheaper high PPD stays)
+    sorted_stays = sorted(
+        candidate_stays,
+        key=lambda x: (x["points_per_dollar"], -x["total_price"], x["check_in_date"]),
+        reverse=True,
+    )
+    selected_itinerary: List[Dict[str, Any]] = []
+    current_total_points = 0
+    current_total_cost = 0.0
+    booked_dates: set[str] = set()
+
+    for stay in sorted_stays:
+        if current_total_points >= target_points:
+            break
+        check_in_str = stay["check_in_date"]
+        if check_in_str not in booked_dates:
+            selected_itinerary.append(stay)
+            current_total_points += stay["points_earned"]
+            current_total_cost += stay["total_price"]
+            booked_dates.add(check_in_str)
+            
+    # Sort the final itinerary by date for presentation
+    selected_itinerary.sort(key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y"))
+    return selected_itinerary, current_total_cost, current_total_points
+
+
+def select_cheapest_stays_for_target_lp(
+    all_stays: List[Dict[str, Any]], target_points: int
+) -> Tuple[List[Dict[str, Any]], float, int]:
+    """
+    New strategy: Selects hotel stays to achieve the target loyalty points
+    at the minimum possible cash spend. It prioritizes the cheapest stays that offer points.
+    Ensures each date is booked only once. This is a greedy approach.
+    """
+    # Filter for stays that actually earn points and have a positive price
+    candidate_stays = [
+        stay for stay in all_stays if stay.get("points_earned", 0) > 0 and stay.get("total_price", 0) > 0
+    ]
+
+    if not candidate_stays:
+        return [], 0.0, 0
+
+    # Sort by total_price (asc), then by points_earned (desc for tie-breaking - more points for same low price)
+    sorted_stays = sorted(
+        candidate_stays,
+        key=lambda x: (x["total_price"], -x["points_earned"], x["check_in_date"]),
+    )
+
+    selected_itinerary: List[Dict[str, Any]] = []
+    current_total_points = 0
+    current_total_cost = 0.0
+    booked_dates: set[str] = set()
+
+    for stay in sorted_stays:
+        # We continue adding stays even if target_points is met, to see if we can find a cheaper combination later.
+        # No, this is greedy. Once target is met with cheapest stays, we stop.
+        # The DP approach (select_optimal_stays_dp) is for true minimum cost.
+        # This greedy function aims for "cheapest path to target LP".
+        if current_total_points >= target_points:
+            break # Stop once target is met with the cheapest available stays so far.
+
+        check_in_str = stay["check_in_date"]
+        if check_in_str not in booked_dates:
+            selected_itinerary.append(stay)
+            current_total_points += stay["points_earned"]
+            current_total_cost += stay["total_price"]
+            booked_dates.add(check_in_str)
+            
+    # Sort the final itinerary by date for presentation
+    selected_itinerary.sort(key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y"))
+
+    if current_total_points < target_points:
+        logging.warning(
+            f"Greedy cheapest stays could not meet target {target_points} LP. Achieved {current_total_points} LP."
+        )
+        # Return the best effort if target not met
+    
+    return selected_itinerary, current_total_cost, current_total_points
+
+
+# Renaming the original DP-based function to avoid confusion with the new greedy one.
+# The user's request implies a simpler greedy "cheapest stays" approach first.
+# The DP function is more complex and might be an alternative strategy later.
+# For now, `select_optimal_stays` will refer to the PPD greedy, and we add the new cost-greedy.
+# Let's rename the DP one to `select_optimal_stays_dp` if we decide to keep it as an option.
+# For this change, I'll assume `select_optimal_stays` is the PPD greedy one,
+# and we are adding `select_cheapest_stays_for_target_lp`.
+# The existing `select_optimal_stays` in the provided code is actually the DP one.
+# I will rename the existing DP `select_optimal_stays` to `select_optimal_stays_dp`
+# and create a new `select_optimal_stays` that was the original PPD greedy.
+
+def select_optimal_stays_ppd( # This was the original PPD greedy logic
+    all_stays: List[Dict[str, Any]], target_points: int
+) -> Tuple[List[Dict[str, Any]], float, int]:
+    # Filter for stays that actually earn points
+    candidate_stays = [stay for stay in all_stays if stay.get("points_earned", 0) > 0]
+
+    if not candidate_stays:
+        return [], 0.0, 0
+
+    # Sort by points_per_dollar (desc), then by total_price (asc for tie-breaking cheaper high PPD stays)
+    sorted_stays = sorted(
+        candidate_stays,
+        key=lambda x: (x["points_per_dollar"], -x["total_price"], x["check_in_date"]),
+        reverse=True,
+    )
+    selected_itinerary: List[Dict[str, Any]] = []
+    current_total_points = 0
+    current_total_cost = 0.0
+    booked_dates: set[str] = set()
+
+    for stay in sorted_stays:
+        if current_total_points >= target_points:
+            break
+        check_in_str = stay["check_in_date"]
+        if check_in_str not in booked_dates:
+            selected_itinerary.append(stay)
+            current_total_points += stay["points_earned"]
+            current_total_cost += stay["total_price"]
+            booked_dates.add(check_in_str)
+            
+    selected_itinerary.sort(key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y"))
+    return selected_itinerary, current_total_cost, current_total_points
+
+# The function previously named select_optimal_stays (which was DP) is now:
+def select_optimal_stays_dp(
+    all_stays: List[Dict[str, Any]], target_points: int
+) -> Tuple[List[Dict[str, Any]], float, int]:
+    """
     Selects an optimal set of hotel stays to achieve the target loyalty points
     at the minimum possible cost, using Dynamic Programming.
     Ensures that each date is booked at most once by pre-selecting the cheapest stay per date.
@@ -446,23 +584,18 @@ def select_optimal_stays(
         return [], 0.0, 0
 
     # DP Initialization
-    # Determine max_dp_points: target_points + a buffer (e.g., max points from a single candidate stay or a fixed buffer)
-    # This buffer helps find solutions that might slightly exceed target_points but cost less overall.
     max_single_stay_points = 0
-    if candidate_stays: # Ensure candidate_stays is not empty
-        max_single_stay_points = max(s["points_earned"] for s in candidate_stays if s["points_earned"] > 0)
+    if candidate_stays: 
+        max_single_stay_points = max((s["points_earned"] for s in candidate_stays if s["points_earned"] > 0), default=0)
     
-    # Ensure max_dp_points is at least target_points, even if max_single_stay_points is 0 or small.
-    # A fixed buffer like 50000 might be too large if target_points is small.
-    # Let's use a slightly more dynamic buffer, e.g., 20% of target or max_single_stay_points.
-    buffer_points = max(max_single_stay_points, int(target_points * 0.2), 1000) # Ensure some buffer
+    buffer_points = max(max_single_stay_points, int(target_points * 0.2), 1000) 
     max_dp_points = target_points + buffer_points
-    if max_dp_points < target_points : # Should not happen with positive buffer, but as a safeguard
+    if max_dp_points < target_points : 
         max_dp_points = target_points
 
 
     dp_min_cost = [float('inf')] * (max_dp_points + 1)
-    dp_itinerary = [[] for _ in range(max_dp_points + 1)] # Stores list of stays
+    dp_itinerary = [[] for _ in range(max_dp_points + 1)] 
     dp_min_cost[0] = 0.0
 
     # DP Calculation
@@ -470,26 +603,19 @@ def select_optimal_stays(
         s_cost = stay["total_price"]
         s_points = stay["points_earned"]
 
-        if s_points <= 0: # Should have been filtered, but double check
+        if s_points <= 0: 
             continue
 
-        # Iterate downwards to use each stay (item) at most once
         for p in range(max_dp_points, s_points - 1, -1):
             if dp_min_cost[p - s_points] != float('inf'):
                 cost_if_taken = dp_min_cost[p - s_points] + s_cost
                 if cost_if_taken < dp_min_cost[p]:
                     dp_min_cost[p] = cost_if_taken
-                    # Store a copy of the previous itinerary and add the current stay
                     dp_itinerary[p] = list(dp_itinerary[p - s_points]) + [stay]
                 elif cost_if_taken == dp_min_cost[p]:
-                    # Tie-breaking: if costs are equal, prefer itinerary with more points or fewer stays
-                    # For now, let's prefer the one that achieves 'p' points with fewer stays if costs are identical.
-                    # Or, if this new path to 'p' uses fewer stays than the existing path to 'p'.
                     if len(dp_itinerary[p - s_points]) + 1 < len(dp_itinerary[p]):
                          dp_itinerary[p] = list(dp_itinerary[p - s_points]) + [stay]
 
-
-    # Extracting Solution: Find the minimum cost for achieving at least target_points
     final_itinerary: List[Dict[str, Any]] = []
     min_total_cost = float('inf')
     achieved_points = 0
@@ -500,23 +626,17 @@ def select_optimal_stays(
             final_itinerary = dp_itinerary[p]
             achieved_points = p
         elif dp_min_cost[p] == min_total_cost:
-            # If costs are identical, prefer the one that achieves more points
-            # or, if points are also identical, prefer fewer stays.
-            if p > achieved_points: # More points for same min_cost
+            if p > achieved_points: 
                 final_itinerary = dp_itinerary[p]
                 achieved_points = p
-            elif p == achieved_points and len(dp_itinerary[p]) < len(final_itinerary): # Same points, fewer stays
+            elif p == achieved_points and len(dp_itinerary[p]) < len(final_itinerary): 
                  final_itinerary = dp_itinerary[p]
-                 # achieved_points remains the same
-
 
     if min_total_cost == float('inf'):
         logging.info(f"Could not achieve the target of {target_points} LP with the given hotel options using DP.")
         return [], 0.0, 0
     
-    # Sort the final itinerary by date for presentation
     final_itinerary.sort(key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y"))
-
     return final_itinerary, min_total_cost, achieved_points
 
 
@@ -571,10 +691,11 @@ def find_best_hotel_deals(
     session_headers: Dict[str, str],
     target_loyalty_points: int,
     progress_callback: Optional[callable] = None,
-    aa_card_bonus: bool = False,  # Added parameter
+    aa_card_bonus: bool = False,
+    optimization_strategy: str = "points_per_dollar", # Added strategy parameter
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, int]:
     """
-    Finds the best hotel deals for a given city and date range.
+    Finds the best hotel deals for a given city and date range, using a specified optimization strategy.
 
     Args:
         city_query: The city to search for (e.g., "Phoenix").
@@ -584,6 +705,7 @@ def find_best_hotel_deals(
         target_loyalty_points: The target number of loyalty points for optimization.
         progress_callback: Optional callback for progress updates.
         aa_card_bonus: Boolean indicating if AA card bonus should be applied.
+        optimization_strategy: The strategy to use ("points_per_dollar", "minimize_cost_for_target_lp", "dp_minimize_cost").
 
     Returns:
         A tuple containing:
@@ -690,9 +812,27 @@ def find_best_hotel_deals(
 
     logging.info(f"\nCollected {len(all_hotel_options)} hotel options.")
 
-    final_itinerary, total_cost, total_points_earned = select_optimal_stays(
-        all_hotel_options, target_loyalty_points
-    )
+    if optimization_strategy == "minimize_cost_for_target_lp":
+        logging.info("Optimizing using: Minimize Cost for Target LP (Greedy Cheapest Stays)")
+        final_itinerary, total_cost, total_points_earned = select_cheapest_stays_for_target_lp(
+            all_hotel_options, target_loyalty_points
+        )
+    elif optimization_strategy == "dp_minimize_cost":
+        logging.info("Optimizing using: Minimize Cost for Target LP (Dynamic Programming)")
+        final_itinerary, total_cost, total_points_earned = select_optimal_stays_dp(
+            all_hotel_options, target_loyalty_points
+        )
+    elif optimization_strategy == "points_per_dollar":
+        logging.info("Optimizing using: Maximize Points per Dollar (Greedy PPD)")
+        final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(
+            all_hotel_options, target_loyalty_points
+        )
+    else: # Default or unknown strategy
+        logging.warning(f"Unknown optimization strategy: {optimization_strategy}. Defaulting to Maximize Points per Dollar.")
+        final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(
+            all_hotel_options, target_loyalty_points
+        )
+    
     return all_hotel_options, final_itinerary, total_cost, total_points_earned
 
 
@@ -730,6 +870,13 @@ def main():
         "--aa-card-bonus",
         action="store_true", # Makes it a flag, default False
         help="Apply 10 extra miles per dollar for AA credit card usage.",
+    )
+    parser.add_argument(
+        "--optimization-strategy",
+        type=str,
+        default="points_per_dollar",
+        choices=["points_per_dollar", "minimize_cost_for_target_lp", "dp_minimize_cost"],
+        help="The optimization strategy to use. Default: points_per_dollar.",
     )
     args = parser.parse_args()
 
@@ -825,9 +972,10 @@ def main():
         start_date=start_date,
         end_date=end_date,
         session_headers=final_session_headers,
-        target_loyalty_points=args.target_lp, # Use the arg from CLI
-        progress_callback=None, # Explicitly None for CLI
-        aa_card_bonus=args.aa_card_bonus, # Pass CLI flag
+        target_loyalty_points=args.target_lp,
+        progress_callback=None,
+        aa_card_bonus=args.aa_card_bonus,
+        optimization_strategy=args.optimization_strategy, # Pass CLI strategy
     )
 
     if not all_hotel_options_main:
