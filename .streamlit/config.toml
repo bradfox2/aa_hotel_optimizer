@@ -1,0 +1,21 @@
+[theme]
+# American Airlines AAdvantage Inspired Theme
+
+# Primary color - used for interactive elements (widgets, buttons)
+# AA Red: Pantone 186 C (approx #C8102E)
+primaryColor="#C8102E"
+
+# Background color for the main content area
+backgroundColor="#FFFFFF" # White is clean and common
+
+# Background color for sidebar, and other secondary elements like code blocks, message boxes
+# Using a more distinct light gray to improve contrast and visual grouping.
+secondaryBackgroundColor="#E8E8E8" # Light-medium gray
+
+# Text color
+# AA Blue: Pantone 281 C (approx #00247D)
+# This provides good contrast on a white background.
+textColor="#0A246A" # Slightly lighter than the darkest AA blue for better readability in bulk text
+
+# Font (optional, Streamlit defaults to sans-serif)
+# font="sans serif"

@@ -34,20 +34,8 @@ SEARCH_API_BASE_URL = (
 )
 RESULTS_API_BASE_URL = "https://www.aadvantagehotels.com/rest/aadvantage-hotels/search"
 
-# Define common Phoenix metro area keywords to help filter results from places API
-PHOENIX_METRO_KEYWORDS = [
-    "phoenix",
-    "scottsdale",
-    "tempe",
-    "mesa",
-    "chandler",
-    "glendale",
-    "gilbert",
-    "peoria",
-    "surprise",
-    "avondale",
-    "goodyear",
-]
+# PHOENIX_METRO_KEYWORDS is no longer needed for generalized place discovery.
+# If specific regional filtering is ever needed again, it could be passed as a parameter.
 
 
 def parse_curl_command(curl_command: str) -> Tuple[Optional[str], Dict[str, str]]:
@@ -91,9 +79,13 @@ def parse_curl_command(curl_command: str) -> Tuple[Optional[str], Dict[str, str]
     return url, headers
 
 
-def discover_phoenix_metro_place_ids(
-    query: str = "Phoenix", session_headers: Optional[Dict[str, str]] = None
+def discover_place_ids( # Renamed from discover_phoenix_metro_place_ids
+    query: str, session_headers: Optional[Dict[str, str]] = None
 ) -> List[Tuple[str, str]]:
+    """
+    Discovers place IDs (primarily AGODA_CITY type) for a given query string.
+    Returns a list of (name, place_id) tuples.
+    """
     discovered_places: Dict[str, str] = {}
     params = {
         "query": query, "source": "AGODA", "language": "en", "includeHotelNames": "true",
@@ -125,32 +117,28 @@ def discover_phoenix_metro_place_ids(
             description = place.get("description", "").lower()
             place_type = place.get("type")
 
-            if not (place_id and name and place_type == "AGODA_CITY"):
-                if place_type == "AGODA_AREA" and query.lower() in name.lower():
-                    if place_id not in discovered_places or len(name) < len(discovered_places[place_id]):
+            # Prioritize AGODA_CITY types. Also consider AGODA_AREA if it's a very close match.
+            if place_id and name:
+                # Prefer AGODA_CITY if the query is in the name or description
+                if place_type == "AGODA_CITY":
+                    if query.lower() in name.lower() or query.lower() in description:
+                        # If multiple AGODA_CITY matches, prefer shorter, more specific names
+                        if place_id not in discovered_places or len(name) < len(discovered_places.get(place_id, name * 2)): # Ensure existing is checked
+                             discovered_places[place_id] = name
+                # Fallback for AGODA_AREA if it's a very direct match to the query,
+                # but AGODA_CITY is generally preferred.
+                elif place_type == "AGODA_AREA" and query.lower() in name.lower():
+                    # Only add if no AGODA_CITY with this ID exists or if this name is better
+                    if place_id not in discovered_places or \
+                       (place_id in discovered_places and len(name) < len(discovered_places[place_id]) and "AGODA_CITY" not in place_id): # Avoid overwriting a city with an area
                         discovered_places[place_id] = name
-                continue
+        
+        # If after iterating, no places were found, log it.
+        if not discovered_places:
+            logging.warning(f"No suitable place IDs found for query '{query}' in the API response.")
 
-            is_relevant_location = False
-            if query.lower() in name.lower() or query.lower() in description:
-                is_relevant_location = True
-            elif "united states" in description and ("arizona" in description or "az" in description):
-                for keyword in PHOENIX_METRO_KEYWORDS:
-                    if keyword in name.lower() or keyword in description:
-                        is_relevant_location = True
-                        break
-            if is_relevant_location:
-                if place_id not in discovered_places or len(name) < len(discovered_places[place_id]):
-                    discovered_places[place_id] = name
-
-        if not discovered_places and query in PHOENIX_METRO_KEYWORDS:
-            for place in places_data:
-                if (place.get("id") and place.get("type") == "AGODA_CITY" and query.lower() in place.get("name", "").lower()):
-                    discovered_places[place["id"]] = place["name"]
-                    logging.info(f"Using general city place ID for '{query}': {place['id']} - {place['name']}")
-                    break
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error discovering place IDs for '{query}': {e}")
+        logging.error(f"Error during place ID discovery for '{query}': {e}")
     except json.JSONDecodeError:
         response_text_content = response.text if response is not None and hasattr(response, "text") else "N/A"
         logging.error(f"Error decoding JSON from places API for '{query}'. Response: {response_text_content}")
@@ -544,146 +532,222 @@ def fetch_data_for_date(
 
 
 def find_best_hotel_deals(
-    city_query: str, start_date: date, end_date: date,
-    session_headers: Dict[str, str], target_loyalty_points: int,
-    progress_callback: Optional[callable] = None, aa_card_bonus: bool = False,
+    city_queries: List[str], 
+    start_date: date, 
+    end_date: date,
+    session_headers: Dict[str, str], 
+    target_loyalty_points: int,
+    progress_callback: Optional[callable] = None, 
+    aa_card_bonus: bool = False,
     optimization_strategy: str = "points_per_dollar",
     iterative_search_for_lp_target: bool = False,
     max_search_days_iterative: int = 180,
-    current_lp_balance: int = 0, # New parameter
+    current_lp_balance: int = 0,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, int]:
-    location_display_name = city_query
-    current_search_start_date = start_date # Renamed for clarity in loop
-    current_search_end_date = end_date   # Renamed for clarity in loop
     
-    all_hotel_options: List[Dict[str, Any]] = []
-    
-    max_iterations = 12 
-    current_iteration = 0
-    absolute_max_end_date = start_date + timedelta(days=max_search_days_iterative)
-
+    all_hotel_options_global: List[Dict[str, Any]] = []
     final_itinerary: List[Dict[str, Any]] = []
     total_cost: float = 0.0
-    total_points_earned: int = current_lp_balance # Initialize with current balance for checking target
+    running_total_lp_achieved = current_lp_balance 
 
-    logging.info(f"Discovering place ID for '{city_query}'...")
-    discovered_locations = discover_phoenix_metro_place_ids(query=city_query, session_headers=session_headers)
-    target_place_id: Optional[str] = None
-    actual_location_name_used = location_display_name
-    if discovered_locations:
-        for name, place_id_val in discovered_locations:
-            if city_query.lower() in name.lower() and "city" in place_id_val.lower():
-                target_place_id = place_id_val
-                actual_location_name_used = name
-                logging.info(f"Found city place ID for '{name}': {target_place_id}")
-                break
-        if not target_place_id and discovered_locations: # Check again if still None
-            target_place_id = discovered_locations[0][1]
-            actual_location_name_used = discovered_locations[0][0]
-            logging.warning(f"Using fallback ID: {target_place_id} ({actual_location_name_used})")
-    if not target_place_id:
-        logging.error(f"Could not discover any place IDs for '{city_query}'.")
-        return [], [], 0.0, 0
+    current_search_pass_start_date = start_date
+    current_search_pass_end_date = end_date
     
+    max_iterations_passes = 12 
+    current_iteration_pass = 0 
+    absolute_max_end_date_for_search = start_date + timedelta(days=max_search_days_iterative)
+
     while True: 
-        current_iteration += 1
-        if iterative_search_for_lp_target and current_iteration > max_iterations:
-            logging.warning(f"Iterative search reached max iterations ({max_iterations}). Stopping.")
+        current_iteration_pass += 1
+        if iterative_search_for_lp_target and current_iteration_pass > max_iterations_passes:
+            logging.warning(f"Iterative search reached max passes ({max_iterations_passes}). Stopping.")
             break
-        if iterative_search_for_lp_target and current_search_start_date > absolute_max_end_date:
-            logging.warning(f"Iterative search reached max search horizon ({absolute_max_end_date.strftime('%m/%d/%Y')}). Stopping.")
+        if iterative_search_for_lp_target and current_search_pass_start_date > absolute_max_end_date_for_search:
+            logging.warning(f"Iterative search reached max search horizon ({absolute_max_end_date_for_search.strftime('%m/%d/%Y')}). Stopping.")
             break
 
-        date_range_chunk = generate_date_range(current_search_start_date, current_search_end_date)
-        if not date_range_chunk:
-            if not iterative_search_for_lp_target or current_search_start_date > current_search_end_date :
-                 break 
-            if current_search_start_date >= absolute_max_end_date: break
-            current_search_start_date = current_search_end_date + timedelta(days=1)
-            current_search_end_date = min(current_search_start_date + timedelta(days=29), absolute_max_end_date)
-            if current_search_start_date > current_search_end_date : break
-            date_range_chunk = generate_date_range(current_search_start_date, current_search_end_date)
-            if not date_range_chunk: break
-
-        logging.info(f"\n--- Searching Hotels in {actual_location_name_used} (Place ID: {target_place_id}) ---")
-        logging.info(f"Current search window: {current_search_start_date.strftime('%m/%d/%Y')} to {current_search_end_date.strftime('%m/%d/%Y')}")
+        hotel_options_this_pass: List[Dict[str, Any]] = []
+        date_range_chunk_for_pass = generate_date_range(current_search_pass_start_date, current_search_pass_end_date)
         
-        num_workers = min(10, len(date_range_chunk) if date_range_chunk else 1)
-        if num_workers == 0: num_workers = 1
+        if not date_range_chunk_for_pass:
+            if not iterative_search_for_lp_target or current_search_pass_start_date > current_search_pass_end_date:
+                logging.info("No more valid dates in the current or initial window.")
+                break 
+            # This means we need to advance dates for the next pass, handled at the end of this loop.
+        
+        logging.info(
+            f"\n--- Iteration Pass {current_iteration_pass}: Searching Date Window "
+            f"{current_search_pass_start_date.strftime('%m/%d/%Y')} to "
+            f"{current_search_pass_end_date.strftime('%m/%d/%Y')} ---"
+        )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-            future_to_date = {
-                executor.submit(
-                    fetch_data_for_date, current_date_in_chunk, actual_location_name_used,
-                    target_place_id, session_headers, aa_card_bonus,
-                ): current_date_in_chunk for current_date_in_chunk in date_range_chunk
-            }
-            disable_tqdm = progress_callback is not None
-            completed_in_chunk = 0
-            for future in tqdm(
-                concurrent.futures.as_completed(future_to_date), total=len(date_range_chunk),
-                desc=f"Iter {current_iteration}: Searching dates", file=sys.stderr, disable=disable_tqdm,
-            ):
-                try:
-                    stays_on_date = future.result()
-                    if stays_on_date: all_hotel_options.extend(stays_on_date)
-                except Exception as exc:
-                    logging.error(f"Error fetching data for a date in chunk: {exc}")
-                finally:
-                    completed_in_chunk += 1
-                    if progress_callback:
-                        progress_callback(completed_in_chunk, len(date_range_chunk), current_iteration, current_search_end_date.strftime('%m/%d/%Y'))
+        for city_idx, current_city_query in enumerate(city_queries):
+            logging.info(f"\nProcessing city {city_idx + 1}/{len(city_queries)}: '{current_city_query}' for current date window...")
+            
+            discovered_locations = discover_place_ids(query=current_city_query, session_headers=session_headers)
+            target_place_id: Optional[str] = None
+            actual_location_name_used_for_city = current_city_query
 
-        if not all_hotel_options:
-            logging.info("No hotel options found in the current search window(s).")
-            if not iterative_search_for_lp_target: return [], [], 0.0, 0
+            if discovered_locations:
+                best_city_match: Optional[Tuple[str, str]] = None
+                for name, place_id_val in discovered_locations:
+                    if "AGODA_CITY" in place_id_val.upper():
+                        if current_city_query.lower() in name.lower():
+                            if best_city_match is None or len(name) < len(best_city_match[0]):
+                                best_city_match = (name, place_id_val)
+                        elif best_city_match is None: # Take first AGODA_CITY if no name match yet
+                            best_city_match = (name, place_id_val)
+                
+                if best_city_match:
+                    actual_location_name_used_for_city, target_place_id = best_city_match
+                    logging.info(f"Selected place ID for '{actual_location_name_used_for_city}': {target_place_id}")
+                elif discovered_locations: # Fallback if no AGODA_CITY, take first discovered
+                    actual_location_name_used_for_city, target_place_id = discovered_locations[0]
+                    logging.warning(f"Using first discovered place ID as fallback for '{current_city_query}': {target_place_id} ({actual_location_name_used_for_city})")
+            
+            if not target_place_id:
+                logging.error(f"Could not discover a suitable place ID for query '{current_city_query}'. Skipping this city.")
+                if progress_callback:
+                    progress_callback(0, 0, current_iteration_pass, 
+                                      current_search_pass_end_date.strftime('%m/%d/%Y'), 
+                                      city_idx + 1, len(city_queries), current_city_query, 
+                                      is_final_city_in_pass=(city_idx + 1 == len(city_queries)),
+                                      status_message="Place ID not found")
+                continue
+
+            if not date_range_chunk_for_pass: # Should not happen if outer check passed, but defensive
+                logging.warning(f"No dates to process for {actual_location_name_used_for_city}. Skipping.")
+                if progress_callback:
+                     progress_callback(0, 0, current_iteration_pass, 
+                                      current_search_pass_end_date.strftime('%m/%d/%Y'), 
+                                      city_idx + 1, len(city_queries), current_city_query, 
+                                      is_final_city_in_pass=(city_idx + 1 == len(city_queries)),
+                                      status_message="No dates in range")
+                continue
+
+            logging.info(f"Searching Hotels in {actual_location_name_used_for_city} (Place ID: {target_place_id}) for dates {current_search_pass_start_date.strftime('%m/%d/%Y')} to {current_search_pass_end_date.strftime('%m/%d/%Y')}")
+            
+            num_workers = min(10, len(date_range_chunk_for_pass))
+            if num_workers == 0: num_workers = 1 # Should not happen if date_range_chunk_for_pass is not empty
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                future_to_date = {
+                    executor.submit(
+                        fetch_data_for_date, current_date_in_chunk, actual_location_name_used_for_city,
+                        target_place_id, session_headers, aa_card_bonus,
+                    ): current_date_in_chunk for current_date_in_chunk in date_range_chunk_for_pass
+                }
+                
+                completed_dates_for_city = 0
+                total_dates_for_city = len(date_range_chunk_for_pass)
+                
+                for future in tqdm(
+                    concurrent.futures.as_completed(future_to_date), total=total_dates_for_city,
+                    desc=f"Pass {current_iteration_pass}, City {city_idx+1}/{len(city_queries)} ({actual_location_name_used_for_city})", 
+                    file=sys.stderr, disable=(progress_callback is not None)
+                ):
+                    try:
+                        stays_on_date = future.result()
+                        if stays_on_date:
+                            hotel_options_this_pass.extend(stays_on_date)
+                    except Exception as exc:
+                        logging.error(f"Error fetching data for a date in {actual_location_name_used_for_city}: {exc}")
+                    finally:
+                        completed_dates_for_city += 1
+                        if progress_callback:
+                            progress_callback(
+                                completed_dates_for_city, total_dates_for_city,
+                                current_iteration_pass, current_search_pass_end_date.strftime('%m/%d/%Y'),
+                                city_idx + 1, len(city_queries), actual_location_name_used_for_city,
+                                is_final_city_in_pass=(city_idx + 1 == len(city_queries))
+                            )
+        
+        if hotel_options_this_pass:
+            existing_hotel_ids_dates = {(h.get('name', ''), h.get('check_in_date', '')) for h in all_hotel_options_global}
+            newly_added_count = 0
+            for h_new in hotel_options_this_pass:
+                # Create a unique key for each hotel stay to avoid duplicates if a city/date is searched multiple times
+                # (e.g. if iterative search expands date range over already searched dates for some reason)
+                # A more robust key might include hotel ID if available and stable.
+                hotel_key = (h_new.get('name', 'UnknownHotel'), 
+                             h_new.get('location', 'UnknownLocation'), 
+                             h_new.get('check_in_date', 'UnknownDate'),
+                             h_new.get('total_price', 0.0))
+
+                is_duplicate = False
+                for existing_h in all_hotel_options_global:
+                    existing_key = (existing_h.get('name', 'UnknownHotel'),
+                                    existing_h.get('location', 'UnknownLocation'),
+                                    existing_h.get('check_in_date', 'UnknownDate'),
+                                    existing_h.get('total_price', 0.0))
+                    if hotel_key == existing_key:
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    all_hotel_options_global.append(h_new)
+                    newly_added_count +=1
+            
+            if newly_added_count > 0:
+                 logging.info(f"Pass {current_iteration_pass}: Added {newly_added_count} new unique hotel options. Total unique options so far: {len(all_hotel_options_global)}")
+            else:
+                 logging.info(f"Pass {current_iteration_pass}: No new unique hotel options found in this pass. Total unique options: {len(all_hotel_options_global)}")
         else:
-            logging.info(f"Collected {len(all_hotel_options)} total hotel options so far.")
+            logging.info(f"Pass {current_iteration_pass}: No hotel options found in this date window across all cities searched in this pass.")
+
+        if all_hotel_options_global:
+            temp_itinerary, temp_cost, temp_total_lp = [], 0.0, current_lp_balance
+            # Determine current achieved LP based on current global hotel pool
             if optimization_strategy == "minimize_cost_for_target_lp":
-                final_itinerary, total_cost, total_points_earned = select_cheapest_stays_for_target_lp(
-                    all_hotel_options, target_loyalty_points, current_lp_balance
+                _, _, temp_total_lp = select_cheapest_stays_for_target_lp(
+                    all_hotel_options_global, target_loyalty_points, current_lp_balance
                 )
             elif optimization_strategy == "dp_minimize_cost":
-                final_itinerary, total_cost, total_points_earned = select_optimal_stays_dp(
-                    all_hotel_options, target_loyalty_points, current_lp_balance
+                 _, _, temp_total_lp = select_optimal_stays_dp(
+                    all_hotel_options_global, target_loyalty_points, current_lp_balance
                 )
             else: 
-                final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(
-                    all_hotel_options, target_loyalty_points, current_lp_balance
+                _, _, temp_total_lp = select_optimal_stays_ppd(
+                    all_hotel_options_global, target_loyalty_points, current_lp_balance
                 )
+            running_total_lp_achieved = temp_total_lp
         
-        if not iterative_search_for_lp_target: break
-        if total_points_earned >= target_loyalty_points:
-            logging.info(f"Target LP of {target_loyalty_points} met or exceeded ({total_points_earned}). Stopping iterative search.")
+        if not iterative_search_for_lp_target:
+            break 
+
+        if running_total_lp_achieved >= target_loyalty_points:
+            logging.info(f"Target LP of {target_loyalty_points} met or exceeded ({running_total_lp_achieved}). Stopping iterative search.")
             break
 
-        current_search_start_date = current_search_end_date + timedelta(days=1)
-        current_search_end_date = min(current_search_start_date + timedelta(days=29), absolute_max_end_date)
-        if current_search_start_date > current_search_end_date :
+        current_search_pass_start_date = current_search_pass_end_date + timedelta(days=1)
+        current_search_pass_end_date = min(current_search_pass_start_date + timedelta(days=29), absolute_max_end_date_for_search)
+        
+        if current_search_pass_start_date > current_search_pass_end_date:
             logging.warning("Iterative search: No more valid future dates to search within limits. Stopping.")
             break
-        logging.info(f"Target LP not yet met. Extending search. Next window: {current_search_start_date.strftime('%m/%d/%Y')} to {current_search_end_date.strftime('%m/%d/%Y')}")
+        if not date_range_chunk_for_pass and not iterative_search_for_lp_target : # If initial date range was empty and not iterative
+            logging.warning("Initial date range was empty and iterative search is not enabled. Stopping.")
+            break
 
-    if not all_hotel_options:
+        logging.info(f"Target LP not yet met ({running_total_lp_achieved}/{target_loyalty_points}). Extending search. Next pass window: {current_search_pass_start_date.strftime('%m/%d/%Y')} to {current_search_pass_end_date.strftime('%m/%d/%Y')}")
+
+    if not all_hotel_options_global:
         logging.info("No hotel options found after all search attempts.")
-        return [], [], 0.0, 0
+        return [], [], 0.0, current_lp_balance 
 
-    if total_points_earned < target_loyalty_points and all_hotel_options: # Final optimization if target not met
-        logging.info("Target LP not met. Performing final optimization on all collected data.")
-        # Re-run selected strategy with all_hotel_options
-        if optimization_strategy == "minimize_cost_for_target_lp":
-            final_itinerary, total_cost, total_points_earned = select_cheapest_stays_for_target_lp(all_hotel_options, target_loyalty_points, current_lp_balance)
-        elif optimization_strategy == "dp_minimize_cost":
-            final_itinerary, total_cost, total_points_earned = select_optimal_stays_dp(all_hotel_options, target_loyalty_points, current_lp_balance)
-        else:
-            final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(all_hotel_options, target_loyalty_points, current_lp_balance)
+    logging.info(f"Performing final optimization on {len(all_hotel_options_global)} collected hotel options.")
+    if optimization_strategy == "minimize_cost_for_target_lp":
+        final_itinerary, total_cost, total_points_earned = select_cheapest_stays_for_target_lp(all_hotel_options_global, target_loyalty_points, current_lp_balance)
+    elif optimization_strategy == "dp_minimize_cost":
+        final_itinerary, total_cost, total_points_earned = select_optimal_stays_dp(all_hotel_options_global, target_loyalty_points, current_lp_balance)
+    else:
+        final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(all_hotel_options_global, target_loyalty_points, current_lp_balance)
             
-    return all_hotel_options, final_itinerary, total_cost, total_points_earned
+    return all_hotel_options_global, final_itinerary, total_cost, total_points_earned
 
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape AAdvantage Hotels for high points-per-dollar stays.")
-    parser.add_argument("city", type=str, help="The city to search for hotels (e.g., 'Phoenix')")
+    parser.add_argument("city", type=str, help="The city to search for hotels (e.g., 'Phoenix')") # Will need to change to list of cities for CLI
     parser.add_argument("--target-lp", type=int, default=125000, help="Target AAdvantage Loyalty Points (LP). Default: 125000.")
     parser.add_argument("--start-date", type=lambda s: datetime.strptime(s, "%m/%d/%Y").date(), default=date.today(), help="Start date (MM/DD/YYYY), defaults to today.")
     parser.add_argument("--end-date", type=lambda s: datetime.strptime(s, "%m/%d/%Y").date(), default=date.today() + timedelta(days=1), help="End date (MM/DD/YYYY), defaults to tomorrow.")
@@ -715,10 +779,16 @@ def main():
     if not final_session_headers:
         logging.warning("No/invalid headers file. Making unauthenticated requests. Results may be limited.")
 
+    # CLI main() will need to be updated to handle list of cities if that's desired for CLI too.
+    # For now, it still uses args.city as a single string.
     all_hotel_options_main, final_itinerary_main, total_cost_main, total_points_earned_main = find_best_hotel_deals(
-        city_query=args.city, start_date=args.start_date, end_date=args.end_date,
-        session_headers=final_session_headers, target_loyalty_points=args.target_lp,
-        progress_callback=None, aa_card_bonus=args.aa_card_bonus,
+        city_queries=[args.city], # Pass as a list
+        start_date=args.start_date, 
+        end_date=args.end_date,
+        session_headers=final_session_headers, 
+        target_loyalty_points=args.target_lp,
+        progress_callback=None, 
+        aa_card_bonus=args.aa_card_bonus,
         optimization_strategy=args.optimization_strategy,
         iterative_search_for_lp_target=args.search_until_lp_target,
         max_search_days_iterative=args.max_search_days,
@@ -734,7 +804,6 @@ def main():
         if final_itinerary_main:
             results_logger.info("\n===== Optimal Loyalty Points Strategy =====")
             results_logger.info(f"Target Loyalty Points: {args.target_lp}")
-            # total_points_earned_main from find_best_hotel_deals already includes current_lp_balance if logic is correct
             results_logger.info(f"Achieved Loyalty Points (including starting balance): {total_points_earned_main}")
             results_logger.info(f"Net New Loyalty Points from Itinerary: {total_points_earned_main - args.current_lp}")
             results_logger.info(f"Total Cost: ${total_cost_main:.2f}")
@@ -750,7 +819,6 @@ def main():
             results_logger.info(header)
             results_logger.info("=" * len(header))
             for stay in final_itinerary_main:
-                # Display points_earned_final_for_itinerary which includes all bonuses for that stay
                 stay_net_points = stay.get('points_earned_final_for_itinerary', stay.get('points_earned',0))
                 stay_final_ppd = stay.get('points_per_dollar_final_for_itinerary', stay.get('points_per_dollar',0.0))
                 results_logger.info(

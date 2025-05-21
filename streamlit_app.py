@@ -14,30 +14,33 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 # Page config must be the first Streamlit command
-st.set_page_config(layout="wide")
+st.set_page_config(
+    layout="wide",
+    page_title="AAdvantage Hotel Optimizer",
+    page_icon="🏨"  # Hotel emoji, can be changed to ✈️ or other
+)
 
 # Attempt to import from the local package
 try:
+    from aa_hotel_optimizer.locations import PREDEFINED_CITY_LISTS
     from aa_hotel_optimizer.main import (
         find_best_hotel_deals,
-        parse_curl_command,  # Added import
+        parse_curl_command,
     )
-except ImportError:
+except ImportError as e:
     st.error(
-        "Failed to import from 'aa_hotel_optimizer'. Ensure it's installed or accessible in your PYTHONPATH. "
+        f"Failed to import necessary modules: {e}. Ensure 'aa_hotel_optimizer' is correctly structured and all dependencies are installed. "
         "If running from the project root, this should work if the package structure is correct."
     )
-    # Attempt individual imports as a fallback or for more specific error messages
-    try:
-        from aa_hotel_optimizer.main import find_best_hotel_deals
-    except ImportError:
-        st.error("Could not import 'find_best_hotel_deals'. App may not function.")
-        st.stop() # Stop if core function is missing
-    try:
-        from aa_hotel_optimizer.main import parse_curl_command
-    except ImportError:
-        st.warning("Could not import 'parse_curl_command'. cURL input will not work.")
-        # Don't stop here, as other auth methods might still work
+    # Provide more granular fallbacks or stop if critical components are missing
+    if "find_best_hotel_deals" not in globals():
+        st.error("Core function 'find_best_hotel_deals' is missing. App cannot function.")
+        st.stop()
+    if "parse_curl_command" not in globals():
+        st.warning("Function 'parse_curl_command' is missing. cURL input will not work.")
+    if "PREDEFINED_CITY_LISTS" not in globals():
+        PREDEFINED_CITY_LISTS = {"Error": ["Could not load city lists"]}
+        st.warning("Predefined city lists are not available.")
 
 
 # Default target points, can be overridden by user input
@@ -47,9 +50,59 @@ st.title("AAdvantage Hotel Optimizer")
 
 st.sidebar.header("Search Parameters")
 
-# Inputs
-city_query = st.sidebar.text_input("City", "Phoenix")
+# --- Search Type Selection ---
+search_type = st.sidebar.radio(
+    "Search Type:",
+    ("Specific Location(s)", "Broad Points Optimization"),
+    key="search_type_selector",
+    help="Choose 'Specific Location(s)' to search one or more particular cities. Choose 'Broad Points Optimization' to scan predefined regions or many custom cities for general point earning."
+)
 
+# --- Conditional City/Region Inputs ---
+city_query_for_backend = "" # This will hold the city string passed to the backend
+cities_to_process_log = [] # For logging/displaying what will be searched
+
+if search_type == "Specific Location(s)":
+    specific_city_input = st.sidebar.text_input(
+        "City to Search:",
+        "Phoenix",
+        help="Enter the city you want to search."
+    )
+    if specific_city_input:
+        cities_to_process_log = [specific_city_input.strip()]
+        city_query_for_backend = cities_to_process_log[0] # Backend currently takes one city
+
+elif search_type == "Broad Points Optimization":
+    selected_region_names = st.sidebar.multiselect(
+        "Select Regions/City Lists:",
+        options=list(PREDEFINED_CITY_LISTS.keys()),
+        help="Select one or more predefined lists of cities to search."
+    )
+    custom_cities_input = st.sidebar.text_area(
+        "Or, add custom cities (comma-separated):",
+        help="Enter additional city names, separated by commas."
+    )
+
+    temp_cities_list = []
+    if selected_region_names:
+        for region_name in selected_region_names:
+            if region_name in PREDEFINED_CITY_LISTS:
+                temp_cities_list.extend(PREDEFINED_CITY_LISTS[region_name])
+    
+    if custom_cities_input:
+        custom_cities = [city.strip() for city in custom_cities_input.split(',') if city.strip()]
+        temp_cities_list.extend(custom_cities)
+    
+    if temp_cities_list:
+        cities_to_process_log = sorted(list(set(temp_cities_list))) # Unique, sorted list
+        # For now, backend only takes one city. We'll pass the first one.
+        # This will be updated when backend handles List[str].
+        city_query_for_backend = cities_to_process_log[0] 
+        st.sidebar.caption(f"Will process {len(cities_to_process_log)} cities (currently sending first to backend: {city_query_for_backend}). Full list display below search button soon.")
+    else:
+        st.sidebar.warning("Please select a region or enter custom cities for broad optimization.")
+
+# --- Common Search Parameters ---
 default_start_date = date.today()
 default_end_date = default_start_date + timedelta(days=1)
 
@@ -153,61 +206,97 @@ if st.sidebar.button("Search for Hotel Deals"):
     # Process cURL command if that method was selected and input is provided
     if auth_method == "cURL Command" and curl_command_input:
         try:
-            parsed_url, parsed_headers = parse_curl_command(curl_command_input)
-            if parsed_headers:
-                session_headers = parsed_headers # Use all headers from cURL
-                st.sidebar.success("cURL command parsed successfully. Using extracted headers.")
-                # Optionally, display some of the parsed headers for confirmation (e.g., User-Agent)
-                # if "User-Agent" in parsed_headers:
-                #     st.sidebar.caption(f"Using User-Agent: {parsed_headers['User-Agent'][:30]}...")
-                if "Cookie" not in parsed_headers:
-                    st.sidebar.warning("Cookie not found in cURL command. Requests might fail.")
+            # Ensure parse_curl_command is available
+            if "parse_curl_command" in globals() and callable(parse_curl_command):
+                parsed_url, parsed_headers = parse_curl_command(curl_command_input)
+                if parsed_headers:
+                    session_headers = parsed_headers # Use all headers from cURL
+                    st.sidebar.success("cURL command parsed successfully. Using extracted headers.")
+                    if "Cookie" not in parsed_headers:
+                        st.sidebar.warning("Cookie not found in cURL command. Requests might fail.")
+                else:
+                    st.sidebar.error("Could not parse headers from cURL command. Please check the format.")
             else:
-                st.sidebar.error("Could not parse headers from cURL command. Please check the format.")
-        except NameError: # If parse_curl_command failed to import
-            st.sidebar.error("cURL parsing function is not available. Cannot process cURL input.")
-        except Exception as e:
+                st.sidebar.error("cURL parsing function is not available. Cannot process cURL input.")
+        except Exception as e: # General exception for parsing logic
             st.sidebar.error(f"Error parsing cURL command: {e}")
-            # Potentially clear session_headers or revert to a safe state
-            session_headers = {}
+            session_headers = {} # Clear headers on error
 
-
-    if not city_query:
-        st.error("Please enter a city.")
+    # Validation for city input
+    if not city_query_for_backend: # Check if any city was resolved to be sent to backend
+        if search_type == "Specific Location(s)":
+            st.error("Please enter a city for 'Specific Location(s)' search.")
+        elif search_type == "Broad Points Optimization":
+            st.error("Please select a region or enter custom cities for 'Broad Points Optimization'.")
+        st.stop() # Stop execution if no city input is valid
     elif start_date_input > end_date_input:
         st.error("Start date cannot be after end date.")
     else:
         progress_bar_placeholder = st.empty()
         status_text_placeholder = st.empty()
 
-        # Updated progress callback to handle iterative search feedback
-        def streamlit_progress_callback(completed_count: int, total_count: int, current_iter: Optional[int] = None, iter_end_date: Optional[str] = None):
+        # Updated progress callback for multi-city and iterative search feedback
+        def streamlit_progress_callback(
+            completed_dates_in_city: int, 
+            total_dates_in_city: int, 
+            current_pass: Optional[int] = None, 
+            pass_end_date: Optional[str] = None,
+            current_city_idx: Optional[int] = None,
+            total_cities: Optional[int] = None,
+            current_city_name: Optional[str] = None,
+            is_final_city_in_pass: bool = False,
+            status_message: Optional[str] = None
+        ):
             progress = 0.0
-            if total_count > 0:  # Avoid division by zero
-                progress = completed_count / total_count
+            if total_dates_in_city > 0:
+                progress = completed_dates_in_city / total_dates_in_city
             
             progress_bar_placeholder.progress(progress)
             
-            if iterative_search_checkbox and current_iter is not None and iter_end_date is not None:
-                status_text_placeholder.text(
-                    f"Iteration {current_iter}: Processed {completed_count}/{total_count} dates (up to {iter_end_date}). Searching for more..."
-                )
-            else:
-                status_text_placeholder.text(f"Processed {completed_count}/{total_count} dates...")
+            msg_parts = []
+            if current_pass is not None:
+                msg_parts.append(f"Pass {current_pass}")
+            if total_cities and total_cities > 1 and current_city_idx is not None and current_city_name:
+                msg_parts.append(f"City {current_city_idx}/{total_cities} ('{current_city_name}')")
+            
+            if total_dates_in_city > 0 :
+                 msg_parts.append(f"Processed {completed_dates_in_city}/{total_dates_in_city} dates")
+            
+            if pass_end_date:
+                 msg_parts.append(f"(window up to {pass_end_date})")
+
+            if status_message: # For specific messages like "Place ID not found", "Target Met", "Extending Search"
+                msg_parts.append(f"- {status_message}")
+            elif iterative_search_checkbox and is_final_city_in_pass:
+                msg_parts.append("Pass complete.") # Backend will log/handle if extending search
+            elif iterative_search_checkbox : # Implies not final_city_in_pass, or still processing current pass
+                 msg_parts.append("Searching...")
+            # If not iterative_search_checkbox, the message parts for city/date processing are usually enough.
+
+            status_text_placeholder.text(" | ".join(msg_parts))
 
         # Define styling function here to ensure it's in scope
-        def style_ppd_column(df, column_name='points_per_dollar'): # Add column_name parameter
+        def style_ppd_column(df, column_name='points_per_dollar'):
             if column_name in df.columns and pd.api.types.is_numeric_dtype(df[column_name]) and not df[column_name].empty:
                 if df[column_name].count() > 0: 
                      return df.style.background_gradient(subset=[column_name], cmap='Greens', low=0.1, high=1.0)
             return df # Return unstyled df if column not suitable or empty
 
-        status_text_placeholder.text(f"Initiating search for {city_query}...")
+        status_text_placeholder.text(f"Initiating search for: {city_query_for_backend}...")
+        if search_type == "Broad Points Optimization" and len(cities_to_process_log) > 1:
+            status_text_placeholder.text(f"Initiating search for {city_query_for_backend} (first of {len(cities_to_process_log)} cities). Full multi-city backend processing is pending.")
         
         try:
-            progress_bar_placeholder.progress(0) 
+            progress_bar_placeholder.progress(0)
+            # Ensure find_best_hotel_deals is available
+            if "find_best_hotel_deals" not in globals() or not callable(find_best_hotel_deals):
+                st.error("Core search function 'find_best_hotel_deals' is not available. App cannot proceed.")
+                st.stop()
+
+            # TODO: When backend supports List[str] for cities, pass cities_to_process_log directly.
+            # For now, we pass city_query_for_backend which is cities_to_process_log[0] or the single specific city.
             all_hotel_options, final_itinerary, total_cost, total_points_earned = find_best_hotel_deals(
-                city_query=city_query,
+                city_queries=cities_to_process_log, # Pass the full list of cities
                 start_date=start_date_input,
                 end_date=end_date_input,
                 session_headers=session_headers,
@@ -276,13 +365,14 @@ if st.sidebar.button("Search for Hotel Deals"):
                     else:
                         st.write("Points per Dollar data not available for histogram.")
                 with col2:
-                    if "total_price" in df_all_options_display.columns and "points_earned" in df_all_options_display.columns and not df_all_options_display[["total_price", "points_earned"]].empty:
-                        st.write("Total Price vs. Points Earned")
-                        scatter_df = df_all_options_display[["total_price", "points_earned"]].copy()
-                        scatter_df.columns = ['Total Price ($)', 'Points Earned']
-                        st.scatter_chart(scatter_df, x='Total Price ($)', y='Points Earned')
+                    if "total_price" in df_all_options_display.columns and "points_per_dollar" in df_all_options_display.columns and not df_all_options_display[["total_price", "points_per_dollar"]].empty:
+                        st.write("Price vs. Points per Dollar (PPD)")
+                        # Using 'points_per_dollar' which is Base+Card PPD for this table
+                        scatter_df = df_all_options_display[["total_price", "points_per_dollar"]].copy()
+                        scatter_df.columns = ['Total Price ($)', 'Base+Card PPD']
+                        st.scatter_chart(scatter_df, x='Total Price ($)', y='Base+Card PPD')
                     else:
-                        st.write("Price/Points data not available for scatter plot.")
+                        st.write("Price/PPD data not available for scatter plot.")
                 st.markdown("---")
             else:
                 st.write("No hotel options found for the given criteria.")
