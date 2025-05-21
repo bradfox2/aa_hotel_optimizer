@@ -400,7 +400,6 @@ elif current_auth_method == "JSON File":
         ):
             st.session_state.session_headers_from_file = {}
             session_headers = {}  # Clear for current run too
-            st.experimental_rerun()
 
 
 if st.sidebar.button("Search for Hotel Deals"):
