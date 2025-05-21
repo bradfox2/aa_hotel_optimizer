@@ -282,9 +282,11 @@ def analyze_hotel_data(
     location_name: str,
     check_in_date_str: str,
     aa_card_bonus: bool = False,
+    aa_card_miles_rate: int = 1,  # Added parameter
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> List[Dict[str, Any]]:
     hotels_value: List[Dict[str, Any]] = []
-    MILES_VALUE_RATE = 0.015  # 1.5 cents per mile
+    # MILES_VALUE_RATE = 0.015  # Replaced by parameter
 
     if not search_results_data or "results" not in search_results_data:
         return hotels_value
@@ -300,20 +302,25 @@ def analyze_hotel_data(
         ).get("amount", 0.0)
         api_points_earned = hotel_data_item.get("rewards", 0)
 
-        card_bonus_points = 0
-        if aa_card_bonus and total_price > 0:
-            card_bonus_points = int(round(total_price * 10))
+        card_lp_bonus_points = 0
+        card_miles_bonus_from_spend = 0
+        actual_card_miles_rate_applied = 0
 
-        points_earned_initial = api_points_earned + card_bonus_points
+        if aa_card_bonus and total_price > 0:
+            card_lp_bonus_points = int(round(total_price * 1))  # 1x LP on spend
+            card_miles_bonus_from_spend = int(
+                round(total_price * aa_card_miles_rate)
+            )  # 1x or 10x miles on spend
+            actual_card_miles_rate_applied = aa_card_miles_rate
+
+        points_earned_initial = api_points_earned + card_lp_bonus_points
         points_per_dollar_initial = (
             points_earned_initial / total_price if total_price > 0 else 0.0
         )
 
-        initial_miles_earned = points_earned_initial
-        if aa_card_bonus and total_price > 0:
-            initial_miles_earned += int(round(total_price * 1))
-
-        initial_miles_value = initial_miles_earned * MILES_VALUE_RATE
+        # Miles calculation: base miles (same as api_points_earned) + miles from card spend
+        initial_miles_earned = api_points_earned + card_miles_bonus_from_spend
+        initial_miles_value = initial_miles_earned * miles_value_rate  # Use parameter
 
         hotels_value.append(
             {
@@ -322,15 +329,16 @@ def analyze_hotel_data(
                 "check_in_date": check_in_date_str,
                 "total_price": total_price,
                 "api_points_earned": api_points_earned,
-                "card_bonus_points": card_bonus_points,
-                "points_earned": points_earned_initial,
+                "card_bonus_points": card_lp_bonus_points,  # LP from card
+                "points_earned": points_earned_initial,  # Total LP before status
                 "points_per_dollar": points_per_dollar_initial,
                 "status_bonus_points": 0,
-                "points_earned_final_for_itinerary": points_earned_initial,
-                "points_per_dollar_final_for_itinerary": points_per_dollar_initial,
+                "points_earned_final_for_itinerary": points_earned_initial,  # Placeholder, recalc with status
+                "points_per_dollar_final_for_itinerary": points_per_dollar_initial,  # Placeholder
                 "aa_card_bonus_applied_to_stay": aa_card_bonus,
-                "miles_earned": initial_miles_earned,
-                "miles_value": initial_miles_value,
+                "aa_card_miles_rate_on_spend": actual_card_miles_rate_applied,
+                "miles_earned": initial_miles_earned,  # Total miles before status
+                "miles_value": initial_miles_value,  # Value of miles before status
                 "refundability": hotel_data_item.get("refundability", "UNKNOWN"),
                 "star_rating": hotel_details.get("stars", 0.0),
                 "user_rating": hotel_details.get("rating", 0.0),
@@ -411,10 +419,10 @@ def generate_date_range(start_date: date, end_date: date) -> List[date]:
 
 
 def _apply_status_bonus_and_recalculate(
-    stay: Dict[str, Any], projected_lp_before_stay: int
-) -> Dict[str, Any]:
+    stay: Dict[str, Any], projected_lp_before_stay: int, miles_value_rate: float = 0.015
+) -> Dict[str, Any]:  # Added miles_value_rate
     current_stay = stay.copy()
-    MILES_VALUE_RATE = 0.015
+    # MILES_VALUE_RATE = 0.015 # Replaced by parameter
     status_bonus_percentage = 0
     if projected_lp_before_stay >= 100000:
         status_bonus_percentage = 0.30
@@ -438,17 +446,16 @@ def _apply_status_bonus_and_recalculate(
     else:
         current_stay["points_per_dollar_final_for_itinerary"] = 0
 
-    final_lp_for_stay = current_stay["points_earned_final_for_itinerary"]
-    final_miles_earned_for_stay = final_lp_for_stay
+    # Initial miles (base + card spend miles) are already in current_stay["miles_earned"]
+    # Status bonus LPs also count as miles
+    final_miles_earned_for_stay = current_stay["miles_earned"] + status_bonus_points
 
-    if (
-        current_stay.get("aa_card_bonus_applied_to_stay", False)
-        and current_stay["total_price"] > 0
-    ):
-        final_miles_earned_for_stay += int(round(current_stay["total_price"] * 1))
-
-    current_stay["miles_earned"] = final_miles_earned_for_stay
-    current_stay["miles_value"] = final_miles_earned_for_stay * MILES_VALUE_RATE
+    current_stay["miles_earned"] = (
+        final_miles_earned_for_stay  # This now includes status bonus
+    )
+    current_stay["miles_value"] = (
+        final_miles_earned_for_stay * miles_value_rate
+    )  # Use parameter
 
     return current_stay
 
@@ -457,6 +464,7 @@ def select_optimal_stays_ppd(
     all_stays: List[Dict[str, Any]],
     target_points: int,
     current_lp_balance: int = 0,
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> Tuple[List[Dict[str, Any]], float, int]:
     candidate_stays_orig = [s for s in all_stays if s.get("api_points_earned", 0) > 0]
     if not candidate_stays_orig:
@@ -483,7 +491,7 @@ def select_optimal_stays_ppd(
         if check_in_str in booked_dates:
             continue
         current_stay_with_bonus = _apply_status_bonus_and_recalculate(
-            stay_data, projected_cumulative_lp
+            stay_data, projected_cumulative_lp, miles_value_rate
         )
         selected_itinerary.append(current_stay_with_bonus)
         projected_cumulative_lp += current_stay_with_bonus[
@@ -505,6 +513,7 @@ def select_cheapest_stays_for_target_lp(
     all_stays: List[Dict[str, Any]],
     target_points: int,
     current_lp_balance: int = 0,
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> Tuple[List[Dict[str, Any]], float, int]:
     candidate_stays_orig = [
         s
@@ -535,7 +544,7 @@ def select_cheapest_stays_for_target_lp(
         if check_in_str in booked_dates:
             continue
         current_stay_with_bonus = _apply_status_bonus_and_recalculate(
-            stay_data, projected_cumulative_lp
+            stay_data, projected_cumulative_lp, miles_value_rate
         )
         selected_itinerary.append(current_stay_with_bonus)
         projected_cumulative_lp += current_stay_with_bonus[
@@ -562,6 +571,7 @@ def select_fastest_calendar_time_lp(
     target_points: int,
     current_lp_balance: int = 0,
     max_overlaps: Optional[int] = None,
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> Tuple[List[Dict[str, Any]], float, int]:
     """
     Selects stays to meet the target LP by the earliest possible calendar date.
@@ -575,7 +585,9 @@ def select_fastest_calendar_time_lp(
     for stay_orig in all_stays:
         if stay_orig.get("api_points_earned", 0) <= 0:
             continue
-        stay_eval = _apply_status_bonus_and_recalculate(stay_orig, current_lp_balance)
+        stay_eval = _apply_status_bonus_and_recalculate(
+            stay_orig, current_lp_balance, miles_value_rate
+        )
         candidate_stays_with_initial_bonus.append(stay_eval)
 
     if not candidate_stays_with_initial_bonus:
@@ -671,6 +683,7 @@ def select_optimal_stays_dp(
     all_stays: List[Dict[str, Any]],
     target_points: int,
     current_lp_balance: int = 0,
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> Tuple[List[Dict[str, Any]], float, int]:
     if not all_stays or target_points <= 0:
         return [], 0.0, current_lp_balance if target_points <= 0 else 0
@@ -781,7 +794,7 @@ def select_optimal_stays_dp(
 
     for stay_data in temp_selected_stays:
         current_stay_with_bonus = _apply_status_bonus_and_recalculate(
-            stay_data, projected_cumulative_lp_for_final_calc
+            stay_data, projected_cumulative_lp_for_final_calc, miles_value_rate
         )
         final_itinerary_with_status_bonus.append(current_stay_with_bonus)
         projected_cumulative_lp_for_final_calc += current_stay_with_bonus[
@@ -805,6 +818,8 @@ def fetch_data_for_date(
     target_place_id: str,
     session_headers: Dict[str, str],
     aa_card_bonus: bool = False,
+    aa_card_miles_rate: int = 1,  # Added parameter
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> List[Dict[str, Any]]:
     check_in_date_str = current_date.strftime("%m/%d/%Y")
     check_out_date_str = (current_date + timedelta(days=1)).strftime("%m/%d/%Y")
@@ -831,6 +846,8 @@ def fetch_data_for_date(
                 actual_location_name_used,
                 check_in_date_str,
                 aa_card_bonus=aa_card_bonus,
+                aa_card_miles_rate=aa_card_miles_rate,  # Pass down
+                miles_value_rate=miles_value_rate,  # Pass down
             )
         else:
             logging.warning(
@@ -851,11 +868,13 @@ def find_best_hotel_deals(
     target_loyalty_points: int,
     progress_callback: Optional[Callable] = None,  # Changed to Callable
     aa_card_bonus: bool = False,
+    aa_card_miles_rate: int = 1,  # Added default value
     optimization_strategy: str = "points_per_dollar",
     iterative_search_for_lp_target: bool = False,
     max_search_days_iterative: int = 180,
     current_lp_balance: int = 0,
     max_overlaps: Optional[int] = None,  # New parameter
+    miles_value_rate: float = 0.015,  # New parameter
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, int]:
     all_hotel_options_global: List[Dict[str, Any]] = []
     final_itinerary: List[Dict[str, Any]] = []
@@ -1002,6 +1021,8 @@ def find_best_hotel_deals(
                         target_place_id,
                         session_headers,
                         aa_card_bonus,
+                        aa_card_miles_rate,  # Pass down
+                        miles_value_rate,  # Pass down
                     ): current_date_in_chunk
                     for current_date_in_chunk in date_range_chunk_for_pass
                 }
@@ -1084,11 +1105,17 @@ def find_best_hotel_deals(
             temp_itinerary, temp_cost, temp_total_lp = [], 0.0, current_lp_balance
             if optimization_strategy == "minimize_cost_for_target_lp":
                 _, _, temp_total_lp = select_cheapest_stays_for_target_lp(
-                    all_hotel_options_global, target_loyalty_points, current_lp_balance
+                    all_hotel_options_global,
+                    target_loyalty_points,
+                    current_lp_balance,
+                    miles_value_rate,
                 )
             elif optimization_strategy == "dp_minimize_cost":
                 _, _, temp_total_lp = select_optimal_stays_dp(
-                    all_hotel_options_global, target_loyalty_points, current_lp_balance
+                    all_hotel_options_global,
+                    target_loyalty_points,
+                    current_lp_balance,
+                    miles_value_rate,
                 )
             elif optimization_strategy == "fastest_calendar_time_lp":
                 _, _, temp_total_lp = select_fastest_calendar_time_lp(
@@ -1096,10 +1123,14 @@ def find_best_hotel_deals(
                     target_loyalty_points,
                     current_lp_balance,
                     max_overlaps=max_overlaps,  # Pass it here
+                    miles_value_rate=miles_value_rate,
                 )
-            else:
+            else:  # Default to points_per_dollar
                 _, _, temp_total_lp = select_optimal_stays_ppd(
-                    all_hotel_options_global, target_loyalty_points, current_lp_balance
+                    all_hotel_options_global,
+                    target_loyalty_points,
+                    current_lp_balance,
+                    miles_value_rate,
                 )
             running_total_lp_achieved = temp_total_lp
 
@@ -1145,12 +1176,18 @@ def find_best_hotel_deals(
     if optimization_strategy == "minimize_cost_for_target_lp":
         final_itinerary, total_cost, total_points_earned = (
             select_cheapest_stays_for_target_lp(
-                all_hotel_options_global, target_loyalty_points, current_lp_balance
+                all_hotel_options_global,
+                target_loyalty_points,
+                current_lp_balance,
+                miles_value_rate,
             )
         )
     elif optimization_strategy == "dp_minimize_cost":
         final_itinerary, total_cost, total_points_earned = select_optimal_stays_dp(
-            all_hotel_options_global, target_loyalty_points, current_lp_balance
+            all_hotel_options_global,
+            target_loyalty_points,
+            current_lp_balance,
+            miles_value_rate,
         )
     elif optimization_strategy == "fastest_calendar_time_lp":
         final_itinerary, total_cost, total_points_earned = (
@@ -1159,11 +1196,15 @@ def find_best_hotel_deals(
                 target_loyalty_points,
                 current_lp_balance,
                 max_overlaps=max_overlaps,  # And here for the final call
+                miles_value_rate=miles_value_rate,
             )
         )
-    else:
+    else:  # Default to points_per_dollar
         final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(
-            all_hotel_options_global, target_loyalty_points, current_lp_balance
+            all_hotel_options_global,
+            target_loyalty_points,
+            current_lp_balance,
+            miles_value_rate,
         )
 
     return all_hotel_options_global, final_itinerary, total_cost, total_points_earned
@@ -1202,7 +1243,14 @@ def main():
     parser.add_argument(
         "--aa-card-bonus",
         action="store_true",
-        help="Apply 10 extra miles per dollar for AA credit card usage.",
+        help="Apply AA credit card benefits (1x LP on spend, and miles as per --aa-card-miles-rate).",
+    )
+    parser.add_argument(
+        "--aa-card-miles-rate",
+        type=int,
+        default=1,
+        choices=[1, 10],
+        help="Rate of miles earned per dollar with AA credit card (1 or 10). Effective if --aa-card-bonus is set. Default: 1.",
     )
     parser.add_argument(
         "--optimization-strategy",
@@ -1239,6 +1287,12 @@ def main():
         default=None,
         help="Maximum concurrent overlaps for 'fastest_calendar_time_lp' strategy. Default: None (unlimited).",
     )
+    parser.add_argument(
+        "--miles-value-rate",
+        type=float,
+        default=0.015,
+        help="Value of one mile in USD (e.g., 0.015 for 1.5 cents). Default: 0.015.",
+    )
     args = parser.parse_args()
 
     final_session_headers: Dict[str, str] = {}
@@ -1274,11 +1328,13 @@ def main():
         target_loyalty_points=args.target_lp,
         progress_callback=None,
         aa_card_bonus=args.aa_card_bonus,
+        aa_card_miles_rate=args.aa_card_miles_rate,
         optimization_strategy=args.optimization_strategy,
         iterative_search_for_lp_target=args.search_until_lp_target,
         max_search_days_iterative=args.max_search_days,
         current_lp_balance=args.current_lp,
         max_overlaps=args.max_overlaps,
+        miles_value_rate=args.miles_value_rate,
     )
 
     if not all_hotel_options_main:

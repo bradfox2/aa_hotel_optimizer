@@ -239,6 +239,17 @@ aa_card_bonus_checkbox = st.sidebar.checkbox(
     key="aa_card_bonus_checkbox",
 )
 
+aa_card_miles_rate_input = 1  # Default if checkbox is off
+if aa_card_bonus_checkbox:
+    aa_card_miles_rate_input = st.sidebar.radio(
+        "AA Card Miles Rate on Spend:",
+        options=[1, 10],
+        index=0,  # Default to 1x
+        format_func=lambda x: f"{x}x miles per dollar",
+        key="aa_card_miles_rate_selector",
+        help="Select the miles earning rate on card spend (1x or 10x). Effective only if AA Card Bonus is checked.",
+    )
+
 current_lp_balance_input = st.sidebar.number_input(
     "Current Loyalty Points Balance",
     min_value=0,
@@ -247,159 +258,6 @@ current_lp_balance_input = st.sidebar.number_input(
     help="Enter your current AAdvantage Loyalty Points balance to factor in status bonuses.",
     key="current_lp_balance_input",
 )
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Search Mode")
-iterative_search_checkbox = st.sidebar.checkbox(
-    "Search future dates until LP target is met",
-    value=False,
-    help="If checked, the search will extend into future dates (up to ~6 months or as configured) until the LP target is met.",
-    key="iterative_search_checkbox",
-)
-# Optionally, add an input for max_search_days if iterative_search_checkbox is checked.
-# For now, we'll use the default from the backend.
-# max_search_days_input = st.sidebar.number_input(
-# "Max search days ahead (for iterative search)", min_value=30, max_value=365, value=180, step=30,
-# disabled=not iterative_search_checkbox
-# )
-
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Optimization Strategy")
-optimization_strategy_options = {
-    "Maximize Points per Dollar (Greedy PPD)": "points_per_dollar",
-    "Minimize Cost for Target LP (Greedy Cheapest Stays)": "minimize_cost_for_target_lp",
-    "Minimize Cost for Target LP (Dynamic Programming)": "dp_minimize_cost",
-    "Fastest Calendar Time to Target LP (Overlaps OK)": "fastest_calendar_time_lp",
-}
-selected_strategy_display = st.sidebar.radio(
-    "Choose Optimization Method:",
-    options=list(optimization_strategy_options.keys()),
-    index=0,  # Default to PPD
-    help=(
-        "Maximize PPD: Good for general high-value stays.\n"
-        "Minimize Cost (Greedy): Finds the cheapest stays to hit LP target quickly.\n"
-        "Minimize Cost (DP): More thorough, aims for true minimum cost to hit LP target (can be slower).\n"
-        "Fastest Calendar Time to Target LP: Aims to complete the LP target by the earliest possible calendar date, allowing stays to overlap."
-    ),
-    key="selected_strategy_display_key",
-)
-optimization_strategy_value = optimization_strategy_options[selected_strategy_display]
-
-# Add conditional input for max overlaps for the specific strategy
-max_concurrent_overlaps = 5  # Default value
-if optimization_strategy_value == "fastest_calendar_time_lp":
-    max_concurrent_overlaps = st.sidebar.number_input(
-        "Max Concurrent Overlaps:",
-        min_value=1,
-        max_value=20,  # Arbitrary upper limit, can be adjusted
-        value=5,
-        step=1,
-        key="max_concurrent_overlaps_input",
-        help="Set the maximum number of hotel stays that can overlap on any given day for the 'Fastest Calendar Time' strategy.",
-    )
-
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Authentication Details")
-
-# Store the auth method from *before* the radio button potentially changes it in this run
-# This helps detect if the user switched away from "JSON File" method
-previous_auth_method_for_json_handling = st.session_state.auth_method_key
-
-# Render the radio button. Its state is now updated in st.session_state.auth_method_key
-st.sidebar.radio(
-    "Authentication Method",
-    ("cURL Command", "Manual Cookie/XSRF", "JSON File"),
-    index=0,  # Default to "cURL Command" if key not in session_state or is None
-    help="Choose how to provide authentication details. cURL is often easiest if you can copy it from your browser's developer tools.",
-    key="auth_method_key",
-)
-# current_auth_method is the source of truth for the selected auth method
-current_auth_method = st.session_state.auth_method_key
-
-# If auth method was "JSON File" and has now changed to something else, clear the stored JSON headers
-if (
-    previous_auth_method_for_json_handling == "JSON File"
-    and current_auth_method != "JSON File"
-):
-    st.session_state.session_headers_from_file = {}
-    # st.sidebar.caption("Cleared previously uploaded JSON headers due to method change.") # Optional user feedback
-
-session_headers: Dict[str, str] = {}  # Initialize for this script run
-# This variable will hold the text from the cURL input area if that's the selected method.
-# It's populated by the widget itself, drawing from st.session_state.curl_command_value.
-curl_command_text_area_content = ""
-
-
-if current_auth_method == "Manual Cookie/XSRF":
-    # Widgets use keys, so their values are in st.session_state
-    st.sidebar.text_area(
-        "Cookie String",
-        height=100,
-        help="Paste the full cookie string here.",
-        key="cookie_input_value",
-    )
-    st.sidebar.text_input(
-        "XSRF Token", help="Paste the XSRF token here.", key="xsrf_token_input_value"
-    )
-    # Populate session_headers from the sticky session state values
-    if st.session_state.get("cookie_input_value"):
-        session_headers["Cookie"] = st.session_state.cookie_input_value.strip()
-    if st.session_state.get("xsrf_token_input_value"):
-        session_headers["X-XSRF-TOKEN"] = (
-            st.session_state.xsrf_token_input_value.strip()
-        )
-
-elif current_auth_method == "cURL Command":
-    # The text area widget populates st.session_state.curl_command_value
-    # and returns its current content to curl_command_text_area_content.
-    curl_command_text_area_content = st.sidebar.text_area(
-        "Paste cURL Command",
-        height=200,
-        help="Paste the full cURL command copied from your browser's network tab. This will attempt to parse headers and cookies.",
-        key="curl_command_value",
-    )
-    # session_headers from cURL are parsed and populated upon button click.
-
-elif current_auth_method == "JSON File":
-    uploaded_headers_file = st.sidebar.file_uploader(
-        "Upload Session Headers JSON file",
-        type=["json"],
-        key="uploaded_headers_file_key",  # Added key
-    )
-    if uploaded_headers_file is not None:  # A new file has been uploaded
-        try:
-            # Parse and store in st.session_state to persist across reruns
-            st.session_state.session_headers_from_file = json.load(
-                uploaded_headers_file
-            )
-            session_headers = (
-                st.session_state.session_headers_from_file
-            )  # Use for current run
-            st.sidebar.success("Headers file loaded and stored in session.")
-        except json.JSONDecodeError:
-            st.sidebar.error("Error decoding JSON from headers file.")
-            st.session_state.session_headers_from_file = {}  # Clear persisted on error
-            session_headers = {}  # Clear for current run
-        except Exception as e:
-            st.sidebar.error(f"Error loading headers: {e}")
-            st.session_state.session_headers_from_file = {}
-            session_headers = {}
-    elif (
-        st.session_state.session_headers_from_file
-    ):  # No new file, but we have persisted headers
-        session_headers = st.session_state.session_headers_from_file
-        st.sidebar.info("Using previously uploaded headers.")
-
-    if (
-        st.session_state.session_headers_from_file
-    ):  # Show clear button if there are stored headers
-        if st.sidebar.button(
-            "Clear Stored JSON Headers", key="clear_json_headers_button"
-        ):
-            st.session_state.session_headers_from_file = {}
-            session_headers = {}  # Clear for current run too
 
 
 if st.sidebar.button("Search for Hotel Deals"):
@@ -549,16 +407,17 @@ if st.sidebar.button("Search for Hotel Deals"):
                     target_loyalty_points=target_loyalty_points,
                     progress_callback=streamlit_progress_callback,
                     aa_card_bonus=aa_card_bonus_checkbox,
+                    aa_card_miles_rate=aa_card_miles_rate_input,
                     optimization_strategy=optimization_strategy_value,
                     iterative_search_for_lp_target=iterative_search_checkbox,
                     # max_search_days_iterative=max_search_days_input, # If we add this input
                     current_lp_balance=current_lp_balance_input,  # Pass current LP balance
-                    # Pass max_concurrent_overlaps if the strategy is relevant, else None or a default that won't apply
                     max_overlaps=(
                         max_concurrent_overlaps
                         if optimization_strategy_value == "fastest_calendar_time_lp"
                         else None
                     ),
+                    miles_value_rate=miles_value_rate_for_backend,  # Pass the new rate
                 )
             )
 
@@ -966,5 +825,172 @@ else:
     st.info(
         "Enter search parameters in the sidebar and click 'Search for Hotel Deals'."
     )
+
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Authentication Details")
+st.sidebar.caption(
+    "Note: Authenticated requests (e.g., via cURL or headers file) are recommended to see personalized bonus levels, "
+    "promotional offers, and accurate mileage earnings based on your AAdvantage status or specific card benefits."
+)
+
+# Store the auth method from *before* the radio button potentially changes it in this run
+# This helps detect if the user switched away from "JSON File" method
+previous_auth_method_for_json_handling = st.session_state.auth_method_key
+
+# Render the radio button. Its state is now updated in st.session_state.auth_method_key
+st.sidebar.radio(
+    "Authentication Method",
+    ("cURL Command", "Manual Cookie/XSRF", "JSON File"),
+    index=0,  # Default to "cURL Command" if key not in session_state or is None
+    help="Choose how to provide authentication details. cURL is often easiest if you can copy it from your browser's developer tools.",
+    key="auth_method_key",
+)
+# current_auth_method is the source of truth for the selected auth method
+current_auth_method = st.session_state.auth_method_key
+
+# If auth method was "JSON File" and has now changed to something else, clear the stored JSON headers
+if (
+    previous_auth_method_for_json_handling == "JSON File"
+    and current_auth_method != "JSON File"
+):
+    st.session_state.session_headers_from_file = {}
+    # st.sidebar.caption("Cleared previously uploaded JSON headers due to method change.") # Optional user feedback
+
+session_headers: Dict[str, str] = {}  # Initialize for this script run
+# This variable will hold the text from the cURL input area if that's the selected method.
+# It's populated by the widget itself, drawing from st.session_state.curl_command_value.
+curl_command_text_area_content = ""
+
+
+if current_auth_method == "Manual Cookie/XSRF":
+    # Widgets use keys, so their values are in st.session_state
+    st.sidebar.text_area(
+        "Cookie String",
+        height=100,
+        help="Paste the full cookie string here.",
+        key="cookie_input_value",
+    )
+    st.sidebar.text_input(
+        "XSRF Token", help="Paste the XSRF token here.", key="xsrf_token_input_value"
+    )
+    # Populate session_headers from the sticky session state values
+    if st.session_state.get("cookie_input_value"):
+        session_headers["Cookie"] = st.session_state.cookie_input_value.strip()
+    if st.session_state.get("xsrf_token_input_value"):
+        session_headers["X-XSRF-TOKEN"] = (
+            st.session_state.xsrf_token_input_value.strip()
+        )
+
+elif current_auth_method == "cURL Command":
+    # The text area widget populates st.session_state.curl_command_value
+    # and returns its current content to curl_command_text_area_content.
+    curl_command_text_area_content = st.sidebar.text_area(
+        "Paste cURL Command",
+        height=200,
+        help="Paste the full cURL command copied from your browser's network tab. This will attempt to parse headers and cookies.",
+        key="curl_command_value",
+    )
+    # session_headers from cURL are parsed and populated upon button click.
+
+elif current_auth_method == "JSON File":
+    uploaded_headers_file = st.sidebar.file_uploader(
+        "Upload Session Headers JSON file",
+        type=["json"],
+        key="uploaded_headers_file_key",  # Added key
+    )
+    if uploaded_headers_file is not None:  # A new file has been uploaded
+        try:
+            # Parse and store in st.session_state to persist across reruns
+            st.session_state.session_headers_from_file = json.load(
+                uploaded_headers_file
+            )
+            session_headers = (
+                st.session_state.session_headers_from_file
+            )  # Use for current run
+            st.sidebar.success("Headers file loaded and stored in session.")
+        except json.JSONDecodeError:
+            st.sidebar.error("Error decoding JSON from headers file.")
+            st.session_state.session_headers_from_file = {}  # Clear persisted on error
+            session_headers = {}  # Clear for current run
+        except Exception as e:
+            st.sidebar.error(f"Error loading headers: {e}")
+            st.session_state.session_headers_from_file = {}
+            session_headers = {}
+    elif (
+        st.session_state.session_headers_from_file
+    ):  # No new file, but we have persisted headers
+        session_headers = st.session_state.session_headers_from_file
+        st.sidebar.info("Using previously uploaded headers.")
+
+    if (
+        st.session_state.session_headers_from_file
+    ):  # Show clear button if there are stored headers
+        if st.sidebar.button(
+            "Clear Stored JSON Headers", key="clear_json_headers_button"
+        ):
+            st.session_state.session_headers_from_file = {}
+            session_headers = {}  # Clear for current run too
+
+
+
+
+st.sidebar.subheader("Optimization Strategy")
+optimization_strategy_options = {
+    "Maximize Points per Dollar (Greedy PPD)": "points_per_dollar",
+    "Minimize Cost for Target LP (Greedy Cheapest Stays)": "minimize_cost_for_target_lp",
+    "Minimize Cost for Target LP (Dynamic Programming)": "dp_minimize_cost",
+    "Fastest Calendar Time to Target LP (Overlaps OK)": "fastest_calendar_time_lp",
+}
+selected_strategy_display = st.sidebar.radio(
+    "Choose Optimization Method:",
+    options=list(optimization_strategy_options.keys()),
+    index=0,  # Default to PPD
+    help=(
+        "Maximize PPD: Good for general high-value stays.\n"
+        "Minimize Cost (Greedy): Finds the cheapest stays to hit LP target quickly.\n"
+        "Minimize Cost (DP): More thorough, aims for true minimum cost to hit LP target (can be slower).\n"
+        "Fastest Calendar Time to Target LP: Aims to complete the LP target by the earliest possible calendar date, allowing stays to overlap."
+    ),
+    key="selected_strategy_display_key",
+)
+optimization_strategy_value = optimization_strategy_options[selected_strategy_display]
+
+# Add conditional input for max overlaps for the specific strategy
+max_concurrent_overlaps = 5  # Default value
+if optimization_strategy_value == "fastest_calendar_time_lp":
+    max_concurrent_overlaps = st.sidebar.number_input(
+        "Max Concurrent Overlaps:",
+        min_value=1,
+        max_value=20,  # Arbitrary upper limit, can be adjusted
+        value=5,
+        step=1,
+        key="max_concurrent_overlaps_input",
+        help="Set the maximum number of hotel stays that can overlap on any given day for the 'Fastest Calendar Time' strategy.",
+    )
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Search Mode")
+iterative_search_checkbox = st.sidebar.checkbox(
+    "Search future dates until LP target is met",
+    value=False,
+    help="If checked, the search will extend into future dates (up to ~6 months or as configured) until the LP target is met.",
+    key="iterative_search_checkbox",
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Advanced Settings")
+miles_value_cents_input = st.sidebar.number_input(
+    "Mileage Value (cents per mile)",
+    min_value=0.1,
+    max_value=10.0,
+    value=1.5,
+    step=0.1,
+    format="%.2f",
+    key="miles_value_cents_input",
+    help="Set your valuation of one AAdvantage mile in cents (e.g., 1.5 for 1.5¢).",
+)
+# Convert cents to decimal for backend (e.g., 1.5 cents -> 0.015)
+miles_value_rate_for_backend = miles_value_cents_input / 100.0
 
 st.sidebar.markdown("---")
