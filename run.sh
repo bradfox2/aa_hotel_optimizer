@@ -1,1 +1,1 @@
-uv run streamlit run AA_Hotel_Optimizer.py
+uv run streamlit run streamlit_app.py
