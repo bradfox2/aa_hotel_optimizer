@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.32.3",
-    "tqdm>=4.66.0", # Added tqdm as a dependency
+    "tqdm>=4.66.0",      # Added tqdm as a dependency
     "streamlit>=1.0.0",
     "pandas>=1.0.0",
     "matplotlib>=3.0.0",
