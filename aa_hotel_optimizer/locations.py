@@ -40,10 +40,10 @@ PREDEFINED_CITY_LISTS = {
     # "Asian Hubs": ASIAN_HUBS,
 }
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # For basic testing or inspection of the lists
     print(f"Number of Major US Metros: {len(MAJOR_US_METROS)}")
     for city in MAJOR_US_METROS:
         print(city)
-    
+
     print(f"\nAvailable predefined lists: {list(PREDEFINED_CITY_LISTS.keys())}")

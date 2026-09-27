@@ -1,123 +1,88 @@
-# AAdvantage Hotel Optimizer
+# LP Optimizer
 
-This project, `aa_hotel_scrape`, provides tools to help you find the best hotel deals on AAdvantageHotels.com and optimize for AAdvantage Loyalty Points (LP) earnings. It includes both a command-line interface (CLI) and an interactive Streamlit web application.
+Compare combinations of AA Hotels reservations to earn more AAdvantage Loyalty
+Points for a trip, or find stays that close a status gap. The original Streamlit
+and CLI workflows are preserved. A customer service now wraps the shared engine.
 
-## 🌟 Key Features
-
-**Core Optimizer Engine (Usable via CLI & Streamlit):**
-
-*   **Hotel Deal Discovery:** Scrapes `AAdvantageHotels.com` for hotel stays.
-*   **Generalized Location Search:** Can search for hotels in **any city worldwide** by name.
-*   **Loyalty Points Optimization:** Identifies cost-effective itineraries of 1-night stays to help reach a target LP goal.
-*   **Dynamic Status Bonus Calculation:** Considers your current LP balance and applies AAdvantage status bonuses (20% at 60k LP, 30% at 100k LP) dynamically as an itinerary is built.
-*   **AA Credit Card Bonus:** Option to include a 10 miles/$ bonus for stays booked with an AA credit card.
-*   **Multiple Optimization Strategies:**
-    *   Maximize Points per Dollar (Greedy PPD)
-    *   Minimize Cost for Target LP (Greedy Cheapest Stays)
-    *   Minimize Cost for Target LP (Dynamic Programming for a more optimal solution)
-*   **Iterative Date Expansion:** Can extend search into future dates if the LP target isn't met in the initial window.
-
-**Streamlit Web Application (Interactive UI):**
-
-*   **User-Friendly Interface:** Easy way to access all optimizer features.
-*   **Flexible Search Modes:**
-    *   **Specific Location(s):** Search one or more user-specified cities.
-    *   **Broad Points Optimization:** Search across predefined lists of cities (e.g., "Major US Metros") or enter a custom list of cities to find the best deals globally.
-*   **Detailed Points Breakdown:** Results tables clearly show API points, card bonus points, and status bonus points for each stay.
-*   **Enhanced Visualizations:**
-    *   Distribution of Points per Dollar (Histogram).
-    *   Scatter plot of Price vs. Points per Dollar (PPD) to easily identify high-value deals.
-*   **Easy Authentication:**
-    *   Parse session headers directly from a pasted cURL command.
-    *   Manual input for Cookie/XSRF tokens.
-    *   Upload session headers via a JSON file.
-*   **Customizable Theme:** Features an AAdvantage-inspired color scheme for a familiar look and feel.
-*   **Assumptions Page:** Provides transparency on the tool's operational assumptions and simplifications.
-
-## 🛠️ Setup
-
-1.  **Clone the repository (if you haven't already):**
-    ```bash
-    git clone <repository_url>
-    cd aa_hotel_scrape
-    ```
-
-2.  **Create a virtual environment (recommended):**
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
-    ```
-
-3.  **Install dependencies:**
-    The project uses `uv` for package management if `uv.lock` and `pyproject.toml` are configured for it. Otherwise, use `pip`.
-    ```bash
-    # If using uv
-    uv pip install -r requirements.txt
-    # Or, if using pip directly
-    pip install -r requirements.txt
-    ```
-    (Ensure `requirements.txt` includes `requests`, `tqdm`, `streamlit`, and `pandas`.)
-
-4.  **Session Headers (Optional but Recommended for Best Results):**
-    To see personalized offers and ensure full access, provide session headers from an authenticated browser session on AAdvantageHotels.com.
-    *   Open your browser's developer tools (usually F12). Go to the Network tab.
-    *   Log in to AAdvantageHotels.com and perform a search.
-    *   Find a request to the AAdvantageHotels API (e.g., a `searchRequest` or `places` call).
-    *   **Easiest Method (Streamlit App):** Right-click the request, choose "Copy" -> "Copy as cURL" (syntax might vary by browser, e.g., "Copy as cURL (bash)" for Chrome). Paste this directly into the "cURL Command" input in the Streamlit app's sidebar.
-    *   **Manual Method (CLI or Streamlit):** Copy headers like `cookie`, `x-xsrf-token` into a JSON file (see `headers_example.json` for structure, save yours as `my_headers.json`) or input manually in the Streamlit app.
-    *   **Important:** Do not commit your actual headers file to Git if your repository is public. Add it to your `.gitignore` file.
-
-## 🚀 How to Use
-
-### Streamlit Web Application (Recommended for most users)
-
-1.  **Activate your virtual environment.**
-2.  **Run the Streamlit app:**
-    ```bash
-    streamlit run streamlit_app.py
-    ```
-3.  Open the URL provided by Streamlit (usually `http://localhost:8501`) in your web browser.
-4.  Use the sidebar to:
-    *   Choose **Search Type**: "Specific Location(s)" or "Broad Points Optimization".
-    *   Enter city/cities or select regions.
-    *   Set date range, target Loyalty Points, current LP balance, and AA card bonus.
-    *   Select an optimization strategy.
-    *   Provide authentication details (cURL paste is often easiest).
-    *   Click "Search for Hotel Deals".
-
-### Command-Line Interface (CLI)
-
-The main script for CLI usage is `aa_hotel_optimizer/main.py`.
-
-**Command-Line Examples:**
+## Try the local app
 
 ```bash
-# Get help on command-line arguments
-python3 aa_hotel_optimizer/main.py --help
-
-# Example: Find an optimal itinerary to reach 125,000 LP in Phoenix
-# for stays between June 1, 2025, and June 30, 2025, using 'my_headers.json'.
-# Note: The CLI currently processes the first city provided if multiple are intended for the backend.
-python3 aa_hotel_optimizer/main.py Phoenix --start-date 06/01/2025 --end-date 06/30/2025 --target-lp 125000 --headers-file my_headers.json --current-lp 10000 --aa-card-bonus
-
-# Search without optimization, just list top deals for a shorter period in London
-python3 aa_hotel_optimizer/main.py London --start-date 07/10/2025 --end-date 07/12/2025 --headers-file my_headers.json
+./dev --reload
 ```
 
-## 💻 Technical Stack
+Open **<http://127.0.0.1:8787>**. Requires Python 3.11+ and uv (local default: 3.12). The app starts with
+an explicitly fictional example; no AA login or payment is needed to explore it.
+Local sign-in displays a development link until email delivery is configured.
 
-*   **Language:** Python 3
-*   **Web UI Framework:** Streamlit
-*   **Data Handling:** Pandas
-*   **Key Libraries (Backend & CLI):**
-    *   `requests`: For making HTTP requests to the AAdvantageHotels API.
-    *   `tqdm`: For displaying progress bars during CLI searches.
-    *   `argparse`: For parsing command-line arguments.
+Read [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) for the browser companion,
+environment variables, tests, migrations, Stripe test mode, and legacy commands.
 
-## ✨ Development Notes
+## What is implemented
 
-This project was largely "vibe coded" with the assistance of an AI pair programmer! 🤖
+- Planned trips: compare single-night, multi-night and mixed booking combinations
+  while covering every night, respecting budget, hotel changes and booking limits.
+- Status searches: multiple cities, LP balances and targets, value/cost/points/
+  earliest-finish strategies, and explicit overlap limits. No-show rewards are
+  not assumed to be guaranteed.
+- Accurate accounting contracts: earned versus projected LP, separate redeemable
+  miles, explicit active partner promotion dates and remaining bonus allowance.
+- Responsive customer interface: a night-by-night booking strip, itemized plans,
+  saved search history, JSON export and copyable booking checklists.
+- Email-link login, ownership checks, hashed credentials, session cookies, CSRF
+  protection, scoped/revocable agent keys, account export and account deletion.
+- Chrome MV3 companion: uses the user's AA Hotels tab without exporting their
+  provider session. Reconnect states, finite task leases, retries and request
+  budgets keep browser work durable and bounded.
+- Stripe Checkout and Customer Portal integration, signed/idempotent webhooks,
+  server-controlled prices, reusable checkout sessions, subscription entitlements
+  and included-search limits. Two free searches, $9/20-search passes and $19/month
+  memberships; unused pass searches survive membership cancellation.
+- Typed [agent API guide](aa_hotel_optimizer/service/static/agents.html), OpenAPI
+  at `/openapi.json`, idempotent submission, polling, cancellation and saved plans.
+- SQLAlchemy persistence, SQLite for local development, PostgreSQL deployment
+  configuration, Alembic migrations, dependency lock and CI checks.
 
----
+Minimum-cost status selection is exact among the available quotes with one
+booking per date. Other status strategies are heuristics. No result guarantees
+market-wide inventory, reward posting, or that a quoted room remains bookable.
 
-Feel free to contribute or raise issues!
+## Current release boundary
+
+This is a **local/private-beta implementation**, not a launched paid service.
+The full app and actual Chrome companion are exercised with mocked provider
+responses. A real personalized AA Hotels session, live Stripe test account,
+Email delivery and deployed PostgreSQL still need integration validation.
+
+The companion has not been published in the Chrome Web Store. The live provider
+adapter is opt-in (`LP_PROVIDER_ENABLED=true`); provider commercial access must be
+resolved before a paid release. The app does not contain a public third-party
+OAuth integration or book hotels automatically.
+
+The quote adapter uses the provider's `rewards` field as an estimated hotel LP
+amount and labels this assumption. A verified base-LP/promotion breakdown and a
+confirmed booking deep link are still needed for stronger live quote guarantees.
+Saved quotes are timestamped; users should run a fresh comparison before booking.
+
+The legacy public URL is <https://aahoteloptimizer.streamlit.app/>. The full
+consumer service has a prepared [Render deployment](DEPLOYMENT.md), Resend email
+delivery, invite controls and a Stripe sandbox path. These need owner-controlled
+accounts before the hosted integrations can be verified.
+
+## Repository map
+
+| Path | Responsibility |
+| --- | --- |
+| `aa_hotel_optimizer/domain.py` | Validated requests, quotes and reward accounting |
+| `aa_hotel_optimizer/solver.py` | Cost selection and complete-trip comparison |
+| `aa_hotel_optimizer/legacy.py` | Existing function contracts and cURL parser |
+| `aa_hotel_optimizer/main.py` | Original provider client and CLI orchestration |
+| `aa_hotel_optimizer/service/` | API, accounts, jobs, billing, database and customer UI |
+| `companion/` | Domain-bound Chrome browser companion |
+| `migrations/` | Versioned database schema |
+| `tests/`, `scripts/browser_smoke.py` | Engine, security, billing and full browser checks |
+| `audit/2026-09-27/` | Original audit evidence, product plan and remediation status |
+
+The audit's original expected-failure tests document the old app at commit
+`66678a3`; they are historical evidence, not the current regression suite.
+
+Independent tool; not affiliated with American Airlines or AAdvantage Hotels.

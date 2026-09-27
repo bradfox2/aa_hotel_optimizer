@@ -1,0 +1,55 @@
+name: Checks
+on: [push, pull_request]
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: lp_test
+          POSTGRES_PASSWORD: lp_test
+          POSTGRES_DB: lp_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lp_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --extra dev --python ${{ matrix.python }}
+      - run: uv run --frozen ruff check aa_hotel_optimizer tests scripts migrations
+      - run: uv run --frozen ruff format --check aa_hotel_optimizer tests scripts migrations
+      - run: uv run --frozen pytest -q
+      - name: Verify the Streamlit entrypoint
+        run: uv run --frozen python scripts/streamlit_smoke.py
+      - run: uv run --frozen playwright install --with-deps chromium
+        if: matrix.python == '3.12'
+      - run: uv run --frozen python scripts/browser_smoke.py
+        if: matrix.python == '3.12'
+      - name: Check migration against an empty database
+        run: |
+          mkdir -p .local
+          uv run --frozen alembic upgrade head
+          uv run --frozen alembic check
+        env:
+          LP_DATABASE_URL: sqlite:///.local/ci.sqlite3
+      - name: Check PostgreSQL production migrations
+        run: |
+          uv run --frozen alembic upgrade head
+          uv run --frozen alembic check
+        env:
+          LP_DATABASE_URL: postgresql+psycopg://lp_test:lp_test@127.0.0.1:5432/lp_test
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.python == '3.12'
+        with:
+          name: browser-checks
+          path: .local/browser-smoke/

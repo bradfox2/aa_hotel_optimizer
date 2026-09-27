@@ -1,0 +1,37 @@
+test_all_python_files_parse (__main__.Baseline.test_all_python_files_parse) ... ok
+test_backend_actually_processes_multiple_cities (__main__.Baseline.test_backend_actually_processes_multiple_cities) ... ok
+test_bash_curl_headers_parse_without_execution (__main__.Baseline.test_bash_curl_headers_parse_without_execution) ... ok
+test_card_lp_and_card_miles_are_separate_before_status (__main__.Baseline.test_card_lp_and_card_miles_are_separate_before_status) ... ok
+test_F02_active_2026_partner_bonus_is_25_percent (__main__.CalculationDefects.test_F02_active_2026_partner_bonus_is_25_percent) ... expected failure
+test_F03_partner_lp_bonus_does_not_create_redeemable_miles (__main__.CalculationDefects.test_F03_partner_lp_bonus_does_not_create_redeemable_miles) ... expected failure
+test_F04_cheapest_returns_balance_including_starting_lp (__main__.CalculationDefects.test_F04_cheapest_returns_balance_including_starting_lp) ... expected failure
+test_F04_iterative_search_stops_when_overall_target_is_met (__main__.CalculationDefects.test_F04_iterative_search_stops_when_overall_target_is_met) ... expected failure
+test_F04_ppd_returns_balance_including_starting_lp (__main__.CalculationDefects.test_F04_ppd_returns_balance_including_starting_lp) ... expected failure
+test_F05_cheapest_bonus_respects_chronological_order (__main__.CalculationDefects.test_F05_cheapest_bonus_respects_chronological_order) ... expected failure
+test_F05_ppd_bonus_respects_chronological_order (__main__.CalculationDefects.test_F05_ppd_bonus_respects_chronological_order) ... expected failure
+test_F06_dp_does_not_discard_a_cheaper_sufficient_offer (__main__.CalculationDefects.test_F06_dp_does_not_discard_a_cheaper_sufficient_offer) ... expected failure
+test_F07_dp_recognizes_an_attainable_target_with_bonus (__main__.CalculationDefects.test_F07_dp_recognizes_an_attainable_target_with_bonus) ... expected failure
+test_F08_result_fetch_visits_more_than_first_page (__main__.DataAndSecurityDefects.test_F08_result_fetch_visits_more_than_first_page) ... expected failure
+test_F09_malformed_offer_does_not_discard_valid_offers (__main__.DataAndSecurityDefects.test_F09_malformed_offer_does_not_discard_valid_offers) ... expected failure
+test_F09_unknown_price_is_not_a_free_stay (__main__.DataAndSecurityDefects.test_F09_unknown_price_is_not_a_free_stay) ... expected failure
+test_F10_double_quoted_curl_preserves_headers (__main__.DataAndSecurityDefects.test_F10_double_quoted_curl_preserves_headers) ... expected failure
+test_F11_invalid_header_error_does_not_log_secret (__main__.DataAndSecurityDefects.test_F11_invalid_header_error_does_not_log_secret) ... expected failure
+test_F12_initial_window_respects_configured_search_horizon (__main__.DataAndSecurityDefects.test_F12_initial_window_respects_configured_search_horizon) ... expected failure
+test_F01_a_weeklong_trip_covers_every_night (__main__.FixedTripProductGaps.test_F01_a_weeklong_trip_covers_every_night) ... expected failure
+test_F01_checkout_date_is_exclusive_for_a_trip (__main__.FixedTripProductGaps.test_F01_checkout_date_is_exclusive_for_a_trip) ... expected failure
+test_F01_search_also_prices_the_continuous_stay (__main__.FixedTripProductGaps.test_F01_search_also_prices_the_continuous_stay) ... expected failure
+test_F13_results_survive_a_widget_rerun (__main__.StreamlitBehavior.test_F13_results_survive_a_widget_rerun) ... 2026-09-27 06:33:33.714 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+expected failure
+test_F14_missing_credentials_stops_personalized_search (__main__.StreamlitBehavior.test_F14_missing_credentials_stops_personalized_search) ... 2026-09-27 06:33:36.200 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+expected failure
+test_F15_incomplete_itinerary_has_an_explicit_shortfall (__main__.StreamlitBehavior.test_F15_incomplete_itinerary_has_an_explicit_shortfall) ... 2026-09-27 06:33:37.069 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+expected failure
+test_initial_app_and_secondary_pages_render (__main__.StreamlitBehavior.test_initial_app_and_secondary_pages_render) ... 2026-09-27 06:33:37.924 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2026-09-27 06:33:38.373 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2026-09-27 06:33:38.377 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+ok
+
+----------------------------------------------------------------------
+Ran 26 tests in 4.816s
+
+OK (expected failures=21)

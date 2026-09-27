@@ -4,7 +4,8 @@ st.set_page_config(
     page_title="Terms and Conditions - AAdvantage Hotel Optimizer", layout="wide"
 )
 
-st.title("Terms and Conditions")
+st.title("Legacy software notice")
+st.info("This is the original software disclaimer. It is not a completed customer agreement for the paid service.")
 
 st.markdown(
     """
