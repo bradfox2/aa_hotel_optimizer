@@ -10,7 +10,7 @@ and CLI workflows are preserved. A customer service now wraps the shared engine.
 ./dev --reload
 ```
 
-Open **<http://127.0.0.1:8787>**. Requires Python 3.12+ and uv. The app starts with
+Open **<http://127.0.0.1:8787>**. Requires Python 3.11+ and uv (local default: 3.12). The app starts with
 an explicitly fictional example; no AA login or payment is needed to explore it.
 Local sign-in displays a development link until email delivery is configured.
 

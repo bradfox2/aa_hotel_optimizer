@@ -1,6 +1,7 @@
 # Local development
 
-Python 3.12+ and uv are required. The original `.venv` on this laptop references a
+Python 3.11+ and uv are required; `.python-version` selects 3.12 locally. The
+existing Streamlit Cloud app uses 3.11, and CI covers both versions. The original `.venv` on this laptop references a
 removed Python 3.10; it is left untouched. The service uses `.venv-service`.
 
 ```bash

@@ -3,7 +3,7 @@ name = "aa-hotel-optimizer"
 version = "0.2.0"
 description = "Hotel booking comparisons, Loyalty Point planning, and a paid-service API."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "requests>=2.33.0",
     "tqdm>=4.67.0",
@@ -38,7 +38,7 @@ packages = ["aa_hotel_optimizer"]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]

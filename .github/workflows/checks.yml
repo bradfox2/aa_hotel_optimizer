@@ -1,8 +1,16 @@
 name: Checks
 on: [push, pull_request]
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     services:
       postgres:
         image: postgres:17
@@ -17,12 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --frozen --extra dev --python 3.12
+      - run: uv sync --frozen --extra dev --python ${{ matrix.python }}
       - run: uv run --frozen ruff check aa_hotel_optimizer tests scripts migrations
       - run: uv run --frozen ruff format --check aa_hotel_optimizer tests scripts migrations
       - run: uv run --frozen pytest -q
+      - name: Verify the Streamlit entrypoint
+        run: uv run --frozen python scripts/streamlit_smoke.py
       - run: uv run --frozen playwright install --with-deps chromium
+        if: matrix.python == '3.12'
       - run: uv run --frozen python scripts/browser_smoke.py
+        if: matrix.python == '3.12'
       - name: Check migration against an empty database
         run: |
           mkdir -p .local
@@ -37,7 +49,7 @@ jobs:
         env:
           LP_DATABASE_URL: postgresql+psycopg://lp_test:lp_test@127.0.0.1:5432/lp_test
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && matrix.python == '3.12'
         with:
           name: browser-checks
           path: .local/browser-smoke/

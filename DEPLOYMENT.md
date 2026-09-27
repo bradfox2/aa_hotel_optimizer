@@ -3,8 +3,10 @@
 The public legacy application is <https://aahoteloptimizer.streamlit.app/>.
 Its repository is <https://github.com/bradfox2/aa_hotel_optimizer>. Before this
 change, `main` at `66678a3` had no GitHub Actions workflows or commit checks.
-Streamlit Community Cloud can redeploy a linked branch directly; that mechanism
-is separate from CI. The new GitHub workflow checks the engine, accounts, billing,
+The live Streamlit metadata confirms branch `main`, entrypoint `streamlit_app.py`,
+Python 3.11 and Streamlit 1.45.1 before this release. Its direct branch deployment
+is separate from CI. Python 3.11 compatibility is preserved; no deletion or
+redeployment of the existing app is needed to change the interpreter. The new GitHub workflow checks the engine, accounts, billing,
 actual companion with mocked AA responses, and SQLite/PostgreSQL migrations.
 
 The new consumer website, login, bridge, Stripe webhook and agent API are served

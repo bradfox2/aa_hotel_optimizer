@@ -226,9 +226,9 @@ end_date_input = st.sidebar.date_input(
 )
 
 aa_card_bonus_checkbox = st.sidebar.checkbox(
-    "AA Credit Card Bonus (10 miles/$)",
+    "Pay with an eligible AA credit card (1 LP/$)",
     value=True,
-    help="Select if you are using an AAdvantage credit card for an extra 10 miles per dollar spent.",
+    help="Estimate 1 Loyalty Point per dollar of eligible card spend. Redeemable card miles are selected separately below.",
     key="aa_card_bonus_checkbox",
 )
 
@@ -515,7 +515,7 @@ if st.sidebar.button("Search for Hotel Deals"):
                     "card_bonus_points": st.column_config.NumberColumn(
                         "Card Bonus",
                         format="%d",
-                        help="Points from AA credit card (10 miles/$).",
+                        help="Estimated Loyalty Points from eligible card spend (1 LP/$).",
                     ),
                     "status_bonus_points": st.column_config.NumberColumn(
                         "Status Bonus",
@@ -633,12 +633,12 @@ if st.sidebar.button("Search for Hotel Deals"):
                     "card_bonus_points": st.column_config.NumberColumn(
                         "Card Bonus",
                         format="%d",
-                        help="Points from AA credit card (10 miles/$).",
+                        help="Estimated Loyalty Points from eligible card spend (1 LP/$).",
                     ),
                     "points_earned": st.column_config.NumberColumn(
                         "Base+Card LP",
                         format="%d",
-                        help="API Points + Card Bonus. Status bonus is applied during itinerary selection.",
+                        help="Estimated hotel Loyalty Points plus eligible card-spend LP. Future status bonuses are not assumed.",
                     ),
                     "points_per_dollar": st.column_config.NumberColumn(
                         "Base+Card LP PPD",
