@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#162B43">
+  <meta name="description" content="Compare hotel booking combinations to earn more AAdvantage Loyalty Points for your stay.">
+  <title>LP Optimizer · Same trip. More Loyalty Points.</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#planner">Skip to planner</a>
+  <header class="topbar shell">
+    <a class="brand" href="/" aria-label="LP Optimizer home"><span class="brand-mark" aria-hidden="true">LP<span>↗</span></span><span>OPTIMIZER<small>MAKE EVERY NIGHT COUNT</small></span></a>
+    <nav aria-label="Main navigation"><button id="history-button" class="text-button">Saved searches</button><button id="agents-button" class="text-button">For agents <span aria-hidden="true">↗</span></button></nav>
+    <button id="account-button" class="button outline small">Sign in</button>
+  </header>
+  <main class="shell">
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">YOUR STAY, BETTER BOOKED</p><h1 id="page-title">Same trip. <span>More Loyalty Points.</span></h1><p class="lede">One reservation or a few? Compare the combinations.<br class="desktop-break"> Find the hotel plan that makes your nights go further.</p></div>
+      <button id="connect-button" class="connection-button"><span class="status-dot" id="connection-dot"></span><span><strong id="connection-title">Connect AA Hotels</strong><small id="connection-subtitle">Use your personal hotel offers</small></span><span aria-hidden="true">↗</span></button>
+    </section>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div class="workspace">
+      <aside class="planner" id="planner">
+        <div class="mode-tabs" role="tablist" aria-label="Search type"><button id="trip-tab" role="tab" aria-selected="true" aria-controls="search-form" data-mode="trip">Plan a trip</button><button id="status-tab" role="tab" aria-selected="false" aria-controls="search-form" data-mode="status">Reach a status goal</button></div>
+        <form id="search-form">
+          <div class="form-heading"><h2 id="form-title">Where are you staying?</h2><p id="form-description">We'll compare whole stays and split bookings.</p></div>
+          <label id="city-field">Destination<input id="city" name="city" type="text" value="Phoenix, Arizona" autocomplete="off" maxlength="100" required></label>
+          <label id="cities-field" hidden>Cities <span class="label-hint">one per line</span><textarea id="cities" rows="3" maxlength="2600">Phoenix, Arizona
+Las Vegas, Nevada</textarea><button id="popular-cities" class="text-button preset-button" type="button">Use major U.S. cities</button></label>
+          <div class="two-columns"><label><span id="check-in-label">Check-in</span><input id="check-in" type="date" required></label><label><span id="check-out-label">Check-out</span><input id="check-out" type="date" required></label></div>
+          <label>Stay budget <span class="label-hint">optional</span><div class="input-prefix"><span>$</span><input id="budget" type="number" min="1" max="100000" step="1" placeholder="No limit" inputmode="decimal"></div></label>
+          <div id="status-fields" hidden><div class="two-columns"><label>Current LP<input id="current-lp" type="number" min="0" max="5000000" value="174000" step="1"></label><label>Status goal<select id="target-lp"><option value="40000">Gold · 40,000</option><option value="75000">Platinum · 75,000</option><option value="125000">Platinum Pro · 125,000</option><option value="200000" selected>EP · 200,000</option><option value="250000">250,000 LP</option><option value="400000">400,000 LP</option></select></label></div><div class="two-columns"><label>Maximum bookings<input id="max-bookings" type="number" min="1" max="30" value="14"></label><label>Bookings per date<select id="max-overlaps"><option value="1">1 · no overlaps</option><option value="2">Up to 2</option><option value="3">Up to 3</option><option value="5">Up to 5</option></select></label></div><p class="field-note">Overlapping and no-show reservations do not guarantee rewards. Use an LP balance for the qualification year being searched.</p></div>
+          <label>Optimize for<select id="objective"><option value="value">Most LP per dollar</option><option value="points">Most Loyalty Points</option><option value="cost">Lowest total cost</option><option value="fastest" hidden>Earliest finish</option></select></label>
+          <div id="trip-options"><label class="check-label"><input id="split" type="checkbox" checked><span>Compare separate reservations<small>Including single nights at the same hotel</small></span></label><label>Hotel changes<select id="hotel-changes"><option value="0">Stay at one hotel</option><option value="1">Allow one change</option><option value="3">Allow up to three changes</option></select></label></div>
+          <details class="preferences"><summary>Guests, filters &amp; earning settings</summary><div class="details-body">
+            <div class="two-columns"><label>Adults<input id="adults" type="number" min="1" max="8" value="1"></label><label>Rooms<input id="rooms" type="number" min="1" max="4" value="1"></label></div>
+            <label>Minimum hotel class<select id="min-stars"><option value="0">Any class</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+            <label class="check-label"><input id="refundable" type="checkbox"><span>Refundable offers only</span></label>
+            <label class="check-label"><input id="card-lp" type="checkbox"><span>Pay with an eligible AA credit card<small>Add 1 LP/$ of eligible spend in this qualification year</small></span></label>
+            <label>Card miles per dollar<select id="card-miles"><option value="0">Do not include card miles</option><option value="1">1 mile</option><option value="2">2 miles</option><option value="3">3 miles</option><option value="4">4 miles</option><option value="5">5 miles</option><option value="10">10 miles</option></select></label>
+            <label>Registered partner LP bonus<select id="partner-bonus"><option value="0">No active bonus</option><option value="25">25% bonus</option><option value="20">20% carryover bonus</option><option value="30">30% carryover bonus</option></select></label>
+            <div id="bonus-fields" hidden><div class="two-columns"><label>Starts<input id="bonus-start" type="date"></label><label>Ends<input id="bonus-end" type="date"></label></div><label>Bonus LP remaining<input id="bonus-remaining" type="number" min="0" max="25000" value="25000"></label></div>
+            <p class="field-note">Use the active dates and remaining allowance shown in your AA account. We don't assume a future bonus has been registered.</p>
+          </div></details>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <button id="search-button" class="button primary full" type="submit">Compare my stay <span aria-hidden="true">→</span></button>
+          <button id="demo-button" class="button quiet full" type="button">Try an example first</button>
+          <p class="form-footnote" id="trial-note">2 free searches. No card required.</p>
+          <p class="form-footnote">No reservations are made by this app.</p>
+        </form>
+      </aside>
+      <section class="results" id="results" aria-label="Booking comparisons" aria-live="polite" aria-busy="false">
+        <div class="result-placeholder"><span class="eyebrow">YOUR BOOKING PLAN</span><h2>A better way to compare every night.</h2><p>Loading a sample comparison…</p></div>
+      </section>
+    </div>
+    <section class="explain" aria-label="How it works"><div><span>01</span><h3>Tell us about your stay</h3><p>Choose your dates, budget, and how much flexibility you have.</p></div><div><span>02</span><h3>Compare the combinations</h3><p>See how separate reservations stack up against one continuous booking.</p></div><div><span>03</span><h3>Book with confidence</h3><p>Review each reservation and confirm its final rewards on AA Hotels.</p></div></section>
+  </main>
+  <footer class="shell footer"><p>Built for people who make the most of their miles.<br><small>Independent tool. Not affiliated with American Airlines or AAdvantage Hotels.</small></p><div><button id="pricing-button" class="text-button">Pricing</button><button id="about-button" class="text-button">How estimates work</button><button id="privacy-button" class="text-button">Privacy</button><a href="/static/agents.html">API guide ↗</a></div></footer>
+  <dialog id="dialog"><div class="dialog-top"><span class="eyebrow" id="dialog-eyebrow">LP OPTIMIZER</span><button id="close-dialog" class="icon-button" aria-label="Close dialog">×</button></div><div id="dialog-content"></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

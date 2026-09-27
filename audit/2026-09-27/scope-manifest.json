@@ -1,0 +1,77 @@
+{
+  "commit": "66678a396f071b024a600cb12337c85a66368314",
+  "tracked_files": [
+    {
+      "path": ".devcontainer/devcontainer.json",
+      "sha256": "e0972276716d4d3e1493c3e5f1a971cdc6fdce3983a701478f0b1797cb205af2"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "ed7b84e816359d17276a801802de5c362c2c572ce3e50a8670c8362b08351380"
+    },
+    {
+      "path": ".python-version",
+      "sha256": "7a41a41354ab8049091ef1a00253ca00567f5a1d3f9aef5502c0b4b5ce9ae707"
+    },
+    {
+      "path": ".streamlit/config.toml",
+      "sha256": "008833abab8fcbf78d0678bb43ff2ddef9cda9edc8721b489151ea00afdda1ad"
+    },
+    {
+      "path": "README.md",
+      "sha256": "1a8e356928c5eb2055c3c6b5dc44e09fa131227bd91807b7fb6958c095872718"
+    },
+    {
+      "path": "aa_hotel_optimizer/__init__.py",
+      "sha256": "5c4b713ec497875214575a9b3a9babb084ac933147442d3de6854dc47d51673e"
+    },
+    {
+      "path": "aa_hotel_optimizer/locations.py",
+      "sha256": "e6570455b482fbf8ac87978251504d8d4322430595cd76a662d36ef681e42db2"
+    },
+    {
+      "path": "aa_hotel_optimizer/main.py",
+      "sha256": "33ed44e077701bff81e1b73d21308fb87d50f82b05cc683475b055caa0762930"
+    },
+    {
+      "path": "assets/curl.png",
+      "sha256": "da0ae00b98c8376bc565630defbdc4f0add5caa83da576aca972c18109bee5d4"
+    },
+    {
+      "path": "assets/curl1.png",
+      "sha256": "b3c42fbdfb86b73303476b9361115170c2622f26bb4ad57baa255d43c9053362"
+    },
+    {
+      "path": "headers_example.json",
+      "sha256": "bea00b1fbf3ff75fab21d440dddad44becc860cff4e5a4773fa3cf67fb6bb5b4"
+    },
+    {
+      "path": "pages/01_Assumptions.py",
+      "sha256": "9f57d97658b35d9fbfec900a0faf7b0b9a66435b989dc5994672d3ccd7903414"
+    },
+    {
+      "path": "pages/02_Terms_and_Conditions.py",
+      "sha256": "85daa70e7f7aef9b02c2f9a21078a22bf9c80c09b2554b6d5f2c59069a8f1ebe"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "6a805ef0465b770b39caa389e486cc6bfffe3f16b20ce976b276e32a1062e327"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "8f3970e2fe8be66e22e1c9395ae8ff5f3a18661937edcf6a4f6571840dda01c9"
+    },
+    {
+      "path": "run.sh",
+      "sha256": "d234ac1202f17b0def88d3cf37c3c9fb400cd3b508c32534cee5e5947c42401d"
+    },
+    {
+      "path": "streamlit_app.py",
+      "sha256": "469913228b236a8af123d5dda20ca1e93bb1f557e92275d593b98bc803b31f87"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "3b58c9d555c9775625f70d2f35a7eb6f942642271738cae44d25b1de90a86325"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+# Deploy this branch as a staging service first. These are paid compute plans;
+# Render shows the current cost before provisioning. No resources exist yet.
+services:
+  - type: web
+    name: lp-optimizer-beta
+    runtime: python
+    region: oregon
+    plan: 0.5c-512mb
+    buildCommand: uv sync --frozen
+    preDeployCommand: uv run --frozen alembic upgrade head
+    startCommand: uv run --frozen python scripts/serve.py
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.13
+      - key: LP_ENVIRONMENT
+        value: staging
+      - key: LP_DATABASE_URL
+        fromDatabase:
+          name: lp-optimizer-beta-db
+          property: connectionString
+      - key: LP_PROVIDER_ENABLED
+        value: "false"
+      - key: LP_LIVE_BILLING_ENABLED
+        value: "false"
+      - key: LP_FREE_SEARCHES
+        value: "2"
+      - key: LP_TRIP_PASS_SEARCHES
+        value: "20"
+      - key: LP_PAID_SEARCHES_PER_MONTH
+        value: "100"
+databases:
+  - name: lp-optimizer-beta-db
+    region: oregon
+    plan: 0.1c-256mb
+    diskSizeGB: 1
+    postgresMajorVersion: "17"
+    ipAllowList: []

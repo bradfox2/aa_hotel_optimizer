@@ -2,96 +2,62 @@ import argparse
 import concurrent.futures  # Added import
 import json
 import logging
-import re  # Added for cURL parsing
 import sys
 import urllib.parse
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from typing import (  # Changed callable to Callable
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
 )
 
 import requests
 from tqdm import tqdm
 
-# Configure root logger for general logs (stderr)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    stream=sys.stderr,
+from aa_hotel_optimizer.legacy import (
+    _apply_status_bonus_and_recalculate as _apply_status_bonus_and_recalculate,
 )
+from aa_hotel_optimizer.legacy import (
+    analyze_hotel_data,
+    select_cheapest_stays_for_target_lp,
+    select_fastest_calendar_time_lp,
+    select_optimal_stays_dp,
+    select_optimal_stays_ppd,
+)
+from aa_hotel_optimizer.legacy import parse_curl_command as parse_curl_command
 
-# Configure a dedicated logger for results (stdout)
-results_logger = logging.getLogger("results")
-results_logger.setLevel(logging.INFO)
-stdout_handler = logging.StreamHandler(sys.stdout)
-stdout_handler.setFormatter(logging.Formatter("%(message)s"))
-results_logger.addHandler(stdout_handler)
-results_logger.propagate = (
-    False  # Prevent results_logger messages from going to root logger
-)
+results_logger = logging.getLogger("aa_hotel_optimizer.results")
+logger = logging.getLogger(__name__)
 
 # Constants for API interaction
 PLACES_API_URL = "https://www.aadvantagehotels.com/rest/aadvantage-hotels/places"
-SEARCH_API_BASE_URL = (
-    "https://www.aadvantagehotels.com/rest/aadvantage-hotels/searchRequest"
-)
+SEARCH_API_BASE_URL = "https://www.aadvantagehotels.com/rest/aadvantage-hotels/searchRequest"
 RESULTS_API_BASE_URL = "https://www.aadvantagehotels.com/rest/aadvantage-hotels/search"
 
 
-def parse_curl_command(curl_command: str) -> Tuple[Optional[str], Dict[str, str]]:
-    """
-    Parses a cURL command string (typically copied from browser developer tools)
-    and extracts the URL and headers.
-
-    Args:
-        curl_command: The cURL command string.
-
-    Returns:
-        A tuple containing:
-        - The URL string (or None if not found).
-        - A dictionary of headers.
-    """
-    headers: Dict[str, str] = {}
-    url: Optional[str] = None
-
-    url_match = re.search(r"curl\s+'([^']*)'", curl_command)
-    if not url_match:
-        url_match = re.search(r'curl\s+"([^"]*)"', curl_command)
-    if url_match:
-        url = url_match.group(1)
-
-    header_matches = re.findall(r"-H\s+'([^']*)'", curl_command)
-    for header_str in header_matches:
-        if ":" in header_str:
-            name, value = header_str.split(":", 1)
-            headers[name.strip()] = value.strip()
-
-    cookie_match = re.search(r"-b\s+'([^']*)'", curl_command)
-    if not cookie_match:
-        cookie_match = re.search(r'-b\s+"([^"]*)"', curl_command)
-
-    if cookie_match:
-        cookie_string = cookie_match.group(1)
-        if "Cookie" in headers:
-            logging.warning("Cookie header already found, -b will overwrite it.")
-        headers["Cookie"] = cookie_string.strip()
-
-    return url, headers
+def _safe_headers(headers):
+    allowed = {"cookie", "x-xsrf-token", "accept", "accept-language", "user-agent"}
+    safe = {}
+    for name, value in headers.items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(value, str)
+            or "\r" in value
+            or "\n" in value
+        ):
+            raise ValueError("Invalid request headers.")
+        if name.lower() in allowed:
+            safe[name] = value
+    return safe
 
 
 def discover_place_ids(
-    query: str, session_headers: Optional[Dict[str, str]] = None
-) -> List[Tuple[str, str]]:
+    query: str, session_headers: dict[str, str] | None = None
+) -> list[tuple[str, str]]:
     """
     Discovers place IDs (primarily AGODA_CITY type) for a given query string.
     Returns a list of (name, place_id) tuples.
     """
-    discovered_places: Dict[str, str] = {}
+    discovered_places: dict[str, str] = {}
     params = {
         "query": query,
         "source": "AGODA",
@@ -104,20 +70,24 @@ def discover_place_ids(
         "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
     if session_headers:
-        request_headers.update(session_headers)
+        request_headers.update(_safe_headers(session_headers))
 
     response = None
     try:
-        logging.info(f"Discovering place IDs for query: '{query}'...")
+        logger.info(f"Discovering place IDs for query: '{query}'...")
         response = requests.get(
-            PLACES_API_URL, params=params, headers=request_headers, timeout=10
+            PLACES_API_URL,
+            params=params,
+            headers=request_headers,
+            allow_redirects=False,
+            timeout=10,
         )
         response.raise_for_status()
         places_data = response.json()
 
         if not isinstance(places_data, list):
-            logging.warning(
-                f"Places API did not return a list for query '{query}'. Response: {places_data}"
+            logger.warning(
+                f"Places API did not return a list for query '{query}'. Unexpected response format."
             )
             return []
 
@@ -144,10 +114,7 @@ def discover_place_ids(
                             else default_comparison_len
                         )
 
-                        if (
-                            place_id not in discovered_places
-                            or current_name_len < len_to_compare
-                        ):
+                        if place_id not in discovered_places or current_name_len < len_to_compare:
                             discovered_places[place_id] = name
                 elif place_type == "AGODA_AREA" and query.lower() in name.lower():
                     existing_name_in_dict_area = discovered_places.get(place_id)
@@ -167,21 +134,12 @@ def discover_place_ids(
                         discovered_places[place_id] = name
 
         if not discovered_places:
-            logging.warning(
-                f"No suitable place IDs found for query '{query}' in the API response."
-            )
+            logger.warning(f"No suitable place IDs found for query '{query}' in the API response.")
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error during place ID discovery for '{query}': {e}")
+        logger.error(f"Error during place ID discovery for '{query}': {type(e).__name__}")
     except json.JSONDecodeError:
-        response_text_content = (
-            response.text
-            if response is not None and hasattr(response, "text")
-            else "N/A"
-        )
-        logging.error(
-            f"Error decoding JSON from places API for '{query}'. Response: {response_text_content}"
-        )
+        logger.error(f"Error decoding JSON from places API for '{query}'. Invalid JSON response.")
     return [(name, place_id) for place_id, name in discovered_places.items()]
 
 
@@ -193,8 +151,8 @@ def search_aadvantage_hotels(
     adults: int = 1,
     children: int = 0,
     rooms: int = 1,
-    session_headers: Optional[Dict[str, str]] = None,
-) -> Optional[str]:
+    session_headers: dict[str, str] | None = None,
+) -> str | None:
     params = {
         "adults": adults,
         "checkIn": check_in_date,
@@ -220,22 +178,22 @@ def search_aadvantage_hotels(
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     }
     if session_headers:
-        request_headers.update(session_headers)
+        request_headers.update(_safe_headers(session_headers))
     response_obj = None
     search_uuid = None
     try:
-        response_obj = requests.get(url, headers=request_headers, timeout=15)
+        response_obj = requests.get(url, headers=request_headers, allow_redirects=False, timeout=15)
         response_obj.raise_for_status()
         data = response_obj.json()
         search_uuid = data.get("uuid")
         if not search_uuid:
-            logging.error(
-                f"Error initiating search for {location} ({check_in_date}-{check_out_date}): 'uuid' not found. Response: {data}"
+            logger.error(
+                f"Error initiating search for {location} ({check_in_date}-{check_out_date}): 'uuid' not found. Unexpected response format."
             )
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error during search initiation for {location}: {e}")
+        logger.error(f"Error during search initiation for {location}: {type(e).__name__}")
     except json.JSONDecodeError:
-        logging.error(f"Error decoding JSON from search initiation for {location}")
+        logger.error(f"Error decoding JSON from search initiation for {location}")
     return search_uuid
 
 
@@ -245,8 +203,8 @@ def get_hotel_results(
     check_in_date: str,
     page_size: int = 45,
     page_number: int = 1,
-    session_headers: Optional[Dict[str, str]] = None,
-) -> Optional[Dict[str, Any]]:
+    session_headers: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
     url = f"{RESULTS_API_BASE_URL}/{search_id}"
     params = {
         "hotelImageHeight": 368,
@@ -262,116 +220,40 @@ def get_hotel_results(
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     }
     if session_headers:
-        request_headers.update(session_headers)
+        request_headers.update(_safe_headers(session_headers))
     response = None
     try:
-        response = requests.get(full_url, headers=request_headers, timeout=20)
+        response = requests.get(
+            full_url, headers=request_headers, allow_redirects=False, timeout=20
+        )
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error getting hotel results for search ID {search_id}: {e}")
+        logger.error(f"Error getting hotel results for search ID {search_id}: {type(e).__name__}")
     except json.JSONDecodeError:
-        logging.error(
-            f"Error decoding JSON from hotel results for search ID {search_id}"
-        )
+        logger.error(f"Error decoding JSON from hotel results for search ID {search_id}")
     return None
 
 
-def analyze_hotel_data(
-    search_results_data: Dict[str, Any],
-    location_name: str,
-    check_in_date_str: str,
-    aa_card_bonus: bool = False,
-    aa_card_miles_rate: int = 1,  # Added parameter
-    miles_value_rate: float = 0.015,  # New parameter
-) -> List[Dict[str, Any]]:
-    hotels_value: List[Dict[str, Any]] = []
-    # MILES_VALUE_RATE = 0.015  # Replaced by parameter
-
-    if not search_results_data or "results" not in search_results_data:
-        return hotels_value
-    results = search_results_data["results"]
-    if not isinstance(results, list):
-        return hotels_value
-
-    for hotel_data_item in results:
-        hotel_details = hotel_data_item.get("hotel", {})
-        hotel_name = hotel_details.get("name", "Unknown Hotel")
-        total_price = hotel_data_item.get(
-            "grandTotalPublishedPriceInclusiveWithFees", {}
-        ).get("amount", 0.0)
-        api_points_earned = hotel_data_item.get("rewards", 0)
-
-        card_lp_bonus_points = 0
-        card_miles_bonus_from_spend = 0
-        actual_card_miles_rate_applied = 0
-
-        if aa_card_bonus and total_price > 0:
-            card_lp_bonus_points = int(round(total_price * 1))  # 1x LP on spend
-            card_miles_bonus_from_spend = int(
-                round(total_price * aa_card_miles_rate)
-            )  # 1x or 10x miles on spend
-            actual_card_miles_rate_applied = aa_card_miles_rate
-
-        points_earned_initial = api_points_earned + card_lp_bonus_points
-        points_per_dollar_initial = (
-            points_earned_initial / total_price if total_price > 0 else 0.0
-        )
-
-        # Miles calculation: base miles (same as api_points_earned) + miles from card spend
-        initial_miles_earned = api_points_earned + card_miles_bonus_from_spend
-        initial_miles_value = initial_miles_earned * miles_value_rate  # Use parameter
-
-        hotels_value.append(
-            {
-                "name": hotel_name,
-                "location": location_name,
-                "check_in_date": check_in_date_str,
-                "total_price": total_price,
-                "api_points_earned": api_points_earned,
-                "card_bonus_points": card_lp_bonus_points,  # LP from card
-                "points_earned": points_earned_initial,  # Total LP before status
-                "points_per_dollar": points_per_dollar_initial,
-                "status_bonus_points": 0,
-                "points_earned_final_for_itinerary": points_earned_initial,  # Placeholder, recalc with status
-                "points_per_dollar_final_for_itinerary": points_per_dollar_initial,  # Placeholder
-                "aa_card_bonus_applied_to_stay": aa_card_bonus,
-                "aa_card_miles_rate_on_spend": actual_card_miles_rate_applied,
-                "miles_earned": initial_miles_earned,  # Total miles before status
-                "miles_value": initial_miles_value,  # Value of miles before status
-                "refundability": hotel_data_item.get("refundability", "UNKNOWN"),
-                "star_rating": hotel_details.get("stars", 0.0),
-                "user_rating": hotel_details.get("rating", 0.0),
-            }
-        )
-    return hotels_value
-
-
-def print_hotel_values_summary(hotels_value: List[Dict[str, Any]], limit: int = 20):
+def print_hotel_values_summary(hotels_value: list[dict[str, Any]], limit: int = 20):
     if not hotels_value:
         results_logger.info("No hotel values to display.")
         return
     hotels_value.sort(
         key=lambda x: (
-            x.get(
-                "points_per_dollar_final_for_itinerary", x.get("points_per_dollar", 0)
-            ),
+            x.get("points_per_dollar_final_for_itinerary", x.get("points_per_dollar", 0)),
             -x["total_price"],
         ),
         reverse=True,
     )
-    results_logger.info(
-        "\n===== Top AAdvantage Points Value Hotels (Based on LP PPD) ====="
-    )
+    results_logger.info("\n===== Top AAdvantage Points Value Hotels (Based on LP PPD) =====")
     header = f"{'Hotel Name':<35} {'Loc':<15} {'Date':<10} {'Price':<8} {'LP':<8} {'LP PPD':<7} {'Miles':<8} {'Val($)':<7} {'Refund':<8}"
     results_logger.info(header)
     results_logger.info("=" * len(header))
     for i, hotel in enumerate(hotels_value):
         if i >= limit:
             break
-        final_lp = hotel.get(
-            "points_earned_final_for_itinerary", hotel.get("points_earned")
-        )
+        final_lp = hotel.get("points_earned_final_for_itinerary", hotel.get("points_earned"))
         final_lp_ppd = hotel.get(
             "points_per_dollar_final_for_itinerary", hotel.get("points_per_dollar")
         )
@@ -409,8 +291,8 @@ def print_hotel_values_summary(hotels_value: List[Dict[str, Any]], limit: int = 
         )
 
 
-def generate_date_range(start_date: date, end_date: date) -> List[date]:
-    dates: List[date] = []
+def generate_date_range(start_date: date, end_date: date) -> list[date]:
+    dates: list[date] = []
     current_date = start_date
     while current_date <= end_date:
         dates.append(current_date)
@@ -418,412 +300,18 @@ def generate_date_range(start_date: date, end_date: date) -> List[date]:
     return dates
 
 
-def _apply_status_bonus_and_recalculate(
-    stay: Dict[str, Any], projected_lp_before_stay: int, miles_value_rate: float = 0.015
-) -> Dict[str, Any]:  # Added miles_value_rate
-    current_stay = stay.copy()
-    # MILES_VALUE_RATE = 0.015 # Replaced by parameter
-    status_bonus_percentage = 0
-    if projected_lp_before_stay >= 100000:
-        status_bonus_percentage = 0.30
-    elif projected_lp_before_stay >= 60000:
-        status_bonus_percentage = 0.20
-
-    base_hotel_points = current_stay["api_points_earned"]
-    status_bonus_points = int(round(base_hotel_points * status_bonus_percentage))
-
-    current_stay["status_bonus_points"] = status_bonus_points
-    base_lp_for_final_calc = current_stay["points_earned"]
-    current_stay["points_earned_final_for_itinerary"] = (
-        base_lp_for_final_calc + status_bonus_points
-    )
-
-    if current_stay["total_price"] > 0:
-        current_stay["points_per_dollar_final_for_itinerary"] = (
-            current_stay["points_earned_final_for_itinerary"]
-            / current_stay["total_price"]
-        )
-    else:
-        current_stay["points_per_dollar_final_for_itinerary"] = 0
-
-    # Initial miles (base + card spend miles) are already in current_stay["miles_earned"]
-    # Status bonus LPs also count as miles
-    final_miles_earned_for_stay = current_stay["miles_earned"] + status_bonus_points
-
-    current_stay["miles_earned"] = (
-        final_miles_earned_for_stay  # This now includes status bonus
-    )
-    current_stay["miles_value"] = (
-        final_miles_earned_for_stay * miles_value_rate
-    )  # Use parameter
-
-    return current_stay
-
-
-def select_optimal_stays_ppd(
-    all_stays: List[Dict[str, Any]],
-    target_points: int,
-    current_lp_balance: int = 0,
-    miles_value_rate: float = 0.015,  # New parameter
-) -> Tuple[List[Dict[str, Any]], float, int]:
-    candidate_stays_orig = [s for s in all_stays if s.get("api_points_earned", 0) > 0]
-    if not candidate_stays_orig:
-        return [], 0.0, 0
-
-    sorted_initial_candidates = sorted(
-        candidate_stays_orig,
-        key=lambda x: (
-            x.get("points_per_dollar", 0),
-            -x.get("total_price", float("inf")),
-        ),
-        reverse=True,
-    )
-
-    selected_itinerary: List[Dict[str, Any]] = []
-    projected_cumulative_lp = current_lp_balance
-    current_total_cost = 0.0
-    booked_dates: set[str] = set()
-
-    for stay_data in sorted_initial_candidates:
-        if projected_cumulative_lp >= target_points:
-            break
-        check_in_str = stay_data["check_in_date"]
-        if check_in_str in booked_dates:
-            continue
-        current_stay_with_bonus = _apply_status_bonus_and_recalculate(
-            stay_data, projected_cumulative_lp, miles_value_rate
-        )
-        selected_itinerary.append(current_stay_with_bonus)
-        projected_cumulative_lp += current_stay_with_bonus[
-            "points_earned_final_for_itinerary"
-        ]
-        current_total_cost += current_stay_with_bonus["total_price"]
-        booked_dates.add(check_in_str)
-
-    final_achieved_points = sum(
-        s["points_earned_final_for_itinerary"] for s in selected_itinerary
-    )
-    selected_itinerary.sort(
-        key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y")
-    )
-    return selected_itinerary, current_total_cost, final_achieved_points
-
-
-def select_cheapest_stays_for_target_lp(
-    all_stays: List[Dict[str, Any]],
-    target_points: int,
-    current_lp_balance: int = 0,
-    miles_value_rate: float = 0.015,  # New parameter
-) -> Tuple[List[Dict[str, Any]], float, int]:
-    candidate_stays_orig = [
-        s
-        for s in all_stays
-        if s.get("api_points_earned", 0) > 0 and s.get("total_price", 0) > 0
-    ]
-    if not candidate_stays_orig:
-        return [], 0.0, 0
-
-    sorted_initial_candidates = sorted(
-        candidate_stays_orig,
-        key=lambda x: (
-            x["total_price"],
-            -x.get("points_earned", 0),
-            x["check_in_date"],
-        ),
-    )
-
-    selected_itinerary: List[Dict[str, Any]] = []
-    projected_cumulative_lp = current_lp_balance
-    current_total_cost = 0.0
-    booked_dates: set[str] = set()
-
-    for stay_data in sorted_initial_candidates:
-        if projected_cumulative_lp >= target_points:
-            break
-        check_in_str = stay_data["check_in_date"]
-        if check_in_str in booked_dates:
-            continue
-        current_stay_with_bonus = _apply_status_bonus_and_recalculate(
-            stay_data, projected_cumulative_lp, miles_value_rate
-        )
-        selected_itinerary.append(current_stay_with_bonus)
-        projected_cumulative_lp += current_stay_with_bonus[
-            "points_earned_final_for_itinerary"
-        ]
-        current_total_cost += current_stay_with_bonus["total_price"]
-        booked_dates.add(check_in_str)
-
-    final_achieved_points = sum(
-        s["points_earned_final_for_itinerary"] for s in selected_itinerary
-    )
-    selected_itinerary.sort(
-        key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y")
-    )
-    if final_achieved_points < target_points:
-        logging.warning(
-            f"Greedy cheapest stays could not meet target {target_points} LP. Achieved {final_achieved_points} LP."
-        )
-    return selected_itinerary, current_total_cost, final_achieved_points
-
-
-def select_fastest_calendar_time_lp(
-    all_stays: List[Dict[str, Any]],
-    target_points: int,
-    current_lp_balance: int = 0,
-    max_overlaps: Optional[int] = None,
-    miles_value_rate: float = 0.015,  # New parameter
-) -> Tuple[List[Dict[str, Any]], float, int]:
-    """
-    Selects stays to meet the target LP by the earliest possible calendar date.
-    Stays can overlap up to 'max_overlaps' per day.
-    Status bonus for each stay is calculated based on initial current_lp_balance.
-    """
-    if not all_stays:
-        return [], 0.0, current_lp_balance
-
-    candidate_stays_with_initial_bonus: List[Dict[str, Any]] = []
-    for stay_orig in all_stays:
-        if stay_orig.get("api_points_earned", 0) <= 0:
-            continue
-        stay_eval = _apply_status_bonus_and_recalculate(
-            stay_orig, current_lp_balance, miles_value_rate
-        )
-        candidate_stays_with_initial_bonus.append(stay_eval)
-
-    if not candidate_stays_with_initial_bonus:
-        return [], 0.0, current_lp_balance
-
-    unique_checkout_dates: List[date] = sorted(
-        list(
-            set(
-                datetime.strptime(s["check_in_date"], "%m/%d/%Y").date()
-                + timedelta(days=1)
-                for s in candidate_stays_with_initial_bonus
-            )
-        )
-    )
-
-    for potential_completion_date in unique_checkout_dates:
-        stays_ending_by_date = [
-            s
-            for s in candidate_stays_with_initial_bonus
-            if datetime.strptime(s["check_in_date"], "%m/%d/%Y").date()
-            < potential_completion_date
-        ]
-
-        if not stays_ending_by_date:
-            continue
-
-        stays_ending_by_date.sort(
-            key=lambda x: (
-                x.get("points_earned_final_for_itinerary", 0),
-                -x.get("total_price", float("inf")),
-            ),
-            reverse=True,
-        )
-
-        selected_itinerary: List[Dict[str, Any]] = []
-        current_total_cost = 0.0
-        # Relative LP needed from new stays
-        relative_lp_needed = target_points - current_lp_balance
-        if relative_lp_needed <= 0:  # Already met or exceeded target
-            return [], 0.0, current_lp_balance
-
-        accumulated_lp_from_new_stays = 0
-
-        for stay_to_consider in stays_ending_by_date:
-            if accumulated_lp_from_new_stays >= relative_lp_needed:
-                break
-
-            can_add_stay = True
-            if max_overlaps is not None and max_overlaps > 0:
-                num_existing_overlaps_for_this_date = 0
-                stay_check_in_date_obj = datetime.strptime(
-                    stay_to_consider["check_in_date"], "%m/%d/%Y"
-                ).date()
-
-                for existing_stay_in_itinerary in selected_itinerary:
-                    existing_stay_check_in_date_obj = datetime.strptime(
-                        existing_stay_in_itinerary["check_in_date"], "%m/%d/%Y"
-                    ).date()
-                    if existing_stay_check_in_date_obj == stay_check_in_date_obj:
-                        num_existing_overlaps_for_this_date += 1
-
-                if num_existing_overlaps_for_this_date >= max_overlaps:
-                    can_add_stay = False
-
-            if not can_add_stay:
-                continue  # Skip this stay as it would exceed max_overlaps
-
-            selected_itinerary.append(stay_to_consider)
-            current_total_cost += stay_to_consider["total_price"]
-            accumulated_lp_from_new_stays += stay_to_consider[
-                "points_earned_final_for_itinerary"
-            ]
-
-        if accumulated_lp_from_new_stays >= relative_lp_needed:
-            selected_itinerary.sort(
-                key=lambda x: (
-                    datetime.strptime(x["check_in_date"], "%m/%d/%Y"),
-                    x.get("name"),
-                )
-            )
-            final_achieved_lp_overall = (
-                current_lp_balance + accumulated_lp_from_new_stays
-            )
-            return selected_itinerary, current_total_cost, final_achieved_lp_overall
-
-    logging.warning(
-        f"Fastest Calendar Time strategy could not meet target {target_points} LP with available options."
-    )
-    return [], 0.0, current_lp_balance
-
-
-def select_optimal_stays_dp(
-    all_stays: List[Dict[str, Any]],
-    target_points: int,
-    current_lp_balance: int = 0,
-    miles_value_rate: float = 0.015,  # New parameter
-) -> Tuple[List[Dict[str, Any]], float, int]:
-    if not all_stays or target_points <= 0:
-        return [], 0.0, current_lp_balance if target_points <= 0 else 0
-
-    best_initial_stay_per_date: Dict[str, Dict[str, Any]] = {}
-    for s_orig in all_stays:
-        stay = s_orig.copy()
-        if stay.get("points_earned", 0) <= 0 or stay.get("total_price", 0) <= 0:
-            continue
-        date_str = stay["check_in_date"]
-        if (
-            date_str not in best_initial_stay_per_date
-            or stay["points_earned"]
-            > best_initial_stay_per_date[date_str]["points_earned"]
-            or (
-                stay["points_earned"]
-                == best_initial_stay_per_date[date_str]["points_earned"]
-                and stay["total_price"]
-                < best_initial_stay_per_date[date_str]["total_price"]
-            )
-        ):
-            best_initial_stay_per_date[date_str] = stay
-
-    candidate_stays_for_dp = list(best_initial_stay_per_date.values())
-
-    if not candidate_stays_for_dp:
-        logging.info("No candidate stays for DP after filtering.")
-        return [], 0.0, current_lp_balance
-
-    relative_target_points = max(0, target_points - current_lp_balance)
-    if relative_target_points == 0:
-        return [], 0.0, current_lp_balance
-
-    max_initial_points_for_dp_range = max(
-        (s.get("points_earned", 0) for s in candidate_stays_for_dp), default=0
-    )
-    buffer_points = max(
-        max_initial_points_for_dp_range, int(relative_target_points * 0.2), 1000
-    )
-    max_dp_points_range = relative_target_points + buffer_points
-    if max_dp_points_range <= 0:
-        max_dp_points_range = relative_target_points
-
-    dp_min_cost = [float("inf")] * (max_dp_points_range + 1)
-    dp_itinerary_indices = [[] for _ in range(max_dp_points_range + 1)]
-    dp_min_cost[0] = 0.0
-
-    for idx, stay_dp_data in enumerate(candidate_stays_for_dp):
-        s_cost = stay_dp_data["total_price"]
-        s_points = stay_dp_data["points_earned"]
-        if s_points <= 0:
-            continue
-
-        for p in range(max_dp_points_range, s_points - 1, -1):
-            if dp_min_cost[p - s_points] != float("inf"):
-                cost_if_taken = dp_min_cost[p - s_points] + s_cost
-                if cost_if_taken < dp_min_cost[p]:
-                    dp_min_cost[p] = cost_if_taken
-                    dp_itinerary_indices[p] = list(
-                        dp_itinerary_indices[p - s_points]
-                    ) + [idx]
-                elif cost_if_taken == dp_min_cost[p] and len(
-                    dp_itinerary_indices[p - s_points]
-                ) + 1 < len(dp_itinerary_indices[p]):
-                    dp_itinerary_indices[p] = list(
-                        dp_itinerary_indices[p - s_points]
-                    ) + [idx]
-
-    best_itinerary_indices_from_dp = []
-    min_total_cost_from_dp = float("inf")
-
-    for p_relative in range(relative_target_points, max_dp_points_range + 1):
-        if dp_min_cost[p_relative] < min_total_cost_from_dp:
-            min_total_cost_from_dp = dp_min_cost[p_relative]
-            best_itinerary_indices_from_dp = dp_itinerary_indices[p_relative]
-        elif dp_min_cost[p_relative] == min_total_cost_from_dp:
-            current_path_points = sum(
-                candidate_stays_for_dp[i]["points_earned"]
-                for i in dp_itinerary_indices[p_relative]
-            )
-            best_path_points = (
-                sum(
-                    candidate_stays_for_dp[i]["points_earned"]
-                    for i in best_itinerary_indices_from_dp
-                )
-                if best_itinerary_indices_from_dp
-                else 0
-            )
-            if current_path_points > best_path_points:
-                best_itinerary_indices_from_dp = dp_itinerary_indices[p_relative]
-
-    if min_total_cost_from_dp == float("inf"):
-        logging.info(
-            f"DP could not achieve relative target of {relative_target_points} LP."
-        )
-        return [], 0.0, current_lp_balance
-
-    temp_selected_stays = [
-        candidate_stays_for_dp[i] for i in best_itinerary_indices_from_dp
-    ]
-    temp_selected_stays.sort(
-        key=lambda x: datetime.strptime(x["check_in_date"], "%m/%d/%Y")
-    )
-
-    final_itinerary_with_status_bonus: List[Dict[str, Any]] = []
-    projected_cumulative_lp_for_final_calc = current_lp_balance
-    final_total_cost = 0.0
-
-    for stay_data in temp_selected_stays:
-        current_stay_with_bonus = _apply_status_bonus_and_recalculate(
-            stay_data, projected_cumulative_lp_for_final_calc, miles_value_rate
-        )
-        final_itinerary_with_status_bonus.append(current_stay_with_bonus)
-        projected_cumulative_lp_for_final_calc += current_stay_with_bonus[
-            "points_earned_final_for_itinerary"
-        ]
-        final_total_cost += current_stay_with_bonus["total_price"]
-
-    final_achieved_total_lp = projected_cumulative_lp_for_final_calc
-
-    if final_achieved_total_lp < target_points:
-        logging.warning(
-            f"DP strategy with status bonus adjustment did not meet target {target_points} LP. Achieved {final_achieved_total_lp} LP."
-        )
-
-    return final_itinerary_with_status_bonus, final_total_cost, final_achieved_total_lp
-
-
 def fetch_data_for_date(
     current_date: date,
     actual_location_name_used: str,
     target_place_id: str,
-    session_headers: Dict[str, str],
+    session_headers: dict[str, str],
     aa_card_bonus: bool = False,
     aa_card_miles_rate: int = 1,  # Added parameter
     miles_value_rate: float = 0.015,  # New parameter
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     check_in_date_str = current_date.strftime("%m/%d/%Y")
     check_out_date_str = (current_date + timedelta(days=1)).strftime("%m/%d/%Y")
-    hotel_stays_on_date: List[Dict[str, Any]] = []
+    hotel_stays_on_date: list[dict[str, Any]] = []
 
     search_uuid = search_aadvantage_hotels(
         check_in_date_str,
@@ -834,50 +322,74 @@ def fetch_data_for_date(
     )
 
     if search_uuid:
-        results_data = get_hotel_results(
-            search_uuid,
-            actual_location_name_used,
-            check_in_date_str,
-            session_headers=session_headers,
-        )
-        if results_data:
-            hotel_stays_on_date = analyze_hotel_data(
+        seen = set()
+        for page in range(1, 21):
+            results_data = get_hotel_results(
+                search_uuid,
+                actual_location_name_used,
+                check_in_date_str,
+                page_number=page,
+                session_headers=session_headers,
+            )
+            if not results_data or not isinstance(results_data.get("results"), list):
+                raise ValueError("Hotel results were unavailable. Try the search again.")
+            if results_data.get("complete") is False:
+                raise ValueError("Hotel results are still pending. Try the search again.")
+            rows = analyze_hotel_data(
                 results_data,
                 actual_location_name_used,
                 check_in_date_str,
                 aa_card_bonus=aa_card_bonus,
-                aa_card_miles_rate=aa_card_miles_rate,  # Pass down
-                miles_value_rate=miles_value_rate,  # Pass down
+                aa_card_miles_rate=aa_card_miles_rate,
+                miles_value_rate=miles_value_rate,
             )
-        else:
-            logging.warning(
-                f"Failed to get hotel results for {actual_location_name_used} on {check_in_date_str} (Search ID: {search_uuid})"
-            )
+            new = [row for row in rows if row["id"] not in seen]
+            hotel_stays_on_date.extend(new)
+            seen.update(row["id"] for row in new)
+            if len(results_data["results"]) < 45:
+                break
+            if not new or page == 20:
+                raise ValueError("Could not verify all hotel result pages. Narrow the search.")
     else:
-        logging.warning(
-            f"Failed to initiate search for {actual_location_name_used} on {check_in_date_str}"
-        )
+        raise ValueError("Hotel search could not be started. Check your session and try again.")
     return hotel_stays_on_date
 
 
 def find_best_hotel_deals(
-    city_queries: List[str],
+    city_queries: list[str],
     start_date: date,
     end_date: date,
-    session_headers: Dict[str, str],
+    session_headers: dict[str, str],
     target_loyalty_points: int,
-    progress_callback: Optional[Callable] = None,  # Changed to Callable
+    progress_callback: Callable | None = None,  # Changed to Callable
     aa_card_bonus: bool = False,
     aa_card_miles_rate: int = 1,  # Added default value
     optimization_strategy: str = "points_per_dollar",
     iterative_search_for_lp_target: bool = False,
     max_search_days_iterative: int = 180,
     current_lp_balance: int = 0,
-    max_overlaps: Optional[int] = None,  # New parameter
+    max_overlaps: int | None = None,  # New parameter
     miles_value_rate: float = 0.015,  # New parameter
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, int]:
-    all_hotel_options_global: List[Dict[str, Any]] = []
-    final_itinerary: List[Dict[str, Any]] = []
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float, int]:
+    if not city_queries or len(city_queries) > 26:
+        raise ValueError("Choose between 1 and 26 cities.")
+    if not 0 <= target_loyalty_points - current_lp_balance <= 500000:
+        if current_lp_balance >= target_loyalty_points:
+            return [], [], 0.0, current_lp_balance
+        raise ValueError("Search for at most 500,000 additional LP.")
+    if end_date < start_date or not 1 <= max_search_days_iterative <= 180:
+        raise ValueError("Choose a valid date window and a horizon of 1–180 days.")
+    horizon = (
+        max_search_days_iterative
+        if iterative_search_for_lp_target
+        else (end_date - start_date).days + 1
+    )
+    if horizon > 180 or horizon * len(city_queries) > 400:
+        raise ValueError("Limit the search to 180 days and 400 city/date combinations.")
+    if iterative_search_for_lp_target:
+        end_date = min(end_date, start_date + timedelta(days=max_search_days_iterative - 1))
+    all_hotel_options_global: list[dict[str, Any]] = []
+    final_itinerary: list[dict[str, Any]] = []
     total_cost: float = 0.0
     running_total_lp_achieved = current_lp_balance
 
@@ -886,17 +398,12 @@ def find_best_hotel_deals(
 
     max_iterations_passes = 12
     current_iteration_pass = 0
-    absolute_max_end_date_for_search = start_date + timedelta(
-        days=max_search_days_iterative
-    )
+    absolute_max_end_date_for_search = start_date + timedelta(days=max_search_days_iterative - 1)
 
     while True:
         current_iteration_pass += 1
-        if (
-            iterative_search_for_lp_target
-            and current_iteration_pass > max_iterations_passes
-        ):
-            logging.warning(
+        if iterative_search_for_lp_target and current_iteration_pass > max_iterations_passes:
+            logger.warning(
                 f"Iterative search reached max passes ({max_iterations_passes}). Stopping."
             )
             break
@@ -904,12 +411,12 @@ def find_best_hotel_deals(
             iterative_search_for_lp_target
             and current_search_pass_start_date > absolute_max_end_date_for_search
         ):
-            logging.warning(
+            logger.warning(
                 f"Iterative search reached max search horizon ({absolute_max_end_date_for_search.strftime('%m/%d/%Y')}). Stopping."
             )
             break
 
-        hotel_options_this_pass: List[Dict[str, Any]] = []
+        hotel_options_this_pass: list[dict[str, Any]] = []
         date_range_chunk_for_pass = generate_date_range(
             current_search_pass_start_date, current_search_pass_end_date
         )
@@ -919,73 +426,52 @@ def find_best_hotel_deals(
                 not iterative_search_for_lp_target
                 or current_search_pass_start_date > current_search_pass_end_date
             ):
-                logging.info("No more valid dates in the current or initial window.")
+                logger.info("No more valid dates in the current or initial window.")
                 break
 
-        logging.info(
+        logger.info(
             f"\n--- Iteration Pass {current_iteration_pass}: Searching Date Window "
             f"{current_search_pass_start_date.strftime('%m/%d/%Y')} to "
             f"{current_search_pass_end_date.strftime('%m/%d/%Y')} ---"
         )
 
         for city_idx, current_city_query in enumerate(city_queries):
-            logging.info(
+            logger.info(
                 f"\nProcessing city {city_idx + 1}/{len(city_queries)}: '{current_city_query}' for current date window..."
             )
 
             discovered_locations = discover_place_ids(
                 query=current_city_query, session_headers=session_headers
             )
-            target_place_id: Optional[str] = None
+            target_place_id: str | None = None
             actual_location_name_used_for_city = current_city_query
 
             if discovered_locations:
-                best_city_match: Optional[Tuple[str, str]] = None
+                best_city_match: tuple[str, str] | None = None
                 for name, place_id_val in discovered_locations:
                     if "AGODA_CITY" in place_id_val.upper():
                         if current_city_query.lower() in name.lower():
-                            if best_city_match is None or len(name) < len(
-                                best_city_match[0]
-                            ):
+                            if best_city_match is None or len(name) < len(best_city_match[0]):
                                 best_city_match = (name, place_id_val)
                         elif best_city_match is None:
                             best_city_match = (name, place_id_val)
 
                 if best_city_match:
-                    actual_location_name_used_for_city, target_place_id = (
-                        best_city_match
-                    )
-                    logging.info(
+                    actual_location_name_used_for_city, target_place_id = best_city_match
+                    logger.info(
                         f"Selected place ID for '{actual_location_name_used_for_city}': {target_place_id}"
                     )
                 elif discovered_locations:
-                    actual_location_name_used_for_city, target_place_id = (
-                        discovered_locations[0]
-                    )
-                    logging.warning(
+                    actual_location_name_used_for_city, target_place_id = discovered_locations[0]
+                    logger.warning(
                         f"Using first discovered place ID as fallback for '{current_city_query}': {target_place_id} ({actual_location_name_used_for_city})"
                     )
 
             if not target_place_id:
-                logging.error(
-                    f"Could not discover a suitable place ID for query '{current_city_query}'. Skipping this city."
-                )
-                if progress_callback:
-                    progress_callback(
-                        0,
-                        0,
-                        current_iteration_pass,
-                        current_search_pass_end_date.strftime("%m/%d/%Y"),
-                        city_idx + 1,
-                        len(city_queries),
-                        current_city_query,
-                        is_final_city_in_pass=(city_idx + 1 == len(city_queries)),
-                        status_message="Place ID not found",
-                    )
-                continue
+                raise ValueError("A city could not be resolved. Use a more specific city name.")
 
             if not date_range_chunk_for_pass:
-                logging.warning(
+                logger.warning(
                     f"No dates to process for {actual_location_name_used_for_city}. Skipping."
                 )
                 if progress_callback:
@@ -1002,17 +488,15 @@ def find_best_hotel_deals(
                     )
                 continue
 
-            logging.info(
+            logger.info(
                 f"Searching Hotels in {actual_location_name_used_for_city} (Place ID: {target_place_id}) for dates {current_search_pass_start_date.strftime('%m/%d/%Y')} to {current_search_pass_end_date.strftime('%m/%d/%Y')}"
             )
 
-            num_workers = min(10, len(date_range_chunk_for_pass))
+            num_workers = min(3, len(date_range_chunk_for_pass))
             if num_workers == 0:
                 num_workers = 1
 
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=num_workers
-            ) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                 future_to_date = {
                     executor.submit(
                         fetch_data_for_date,
@@ -1042,9 +526,12 @@ def find_best_hotel_deals(
                         if stays_on_date:
                             hotel_options_this_pass.extend(stays_on_date)
                     except Exception as exc:
-                        logging.error(
-                            f"Error fetching data for a date in {actual_location_name_used_for_city}: {exc}"
-                        )
+                        for pending in future_to_date:
+                            pending.cancel()
+                        logger.error("Search incomplete: %s", type(exc).__name__)
+                        raise RuntimeError(
+                            "Some dates could not be fetched. Start a fresh search."
+                        ) from None
                     finally:
                         completed_dates_for_city += 1
                         if progress_callback:
@@ -1056,53 +543,44 @@ def find_best_hotel_deals(
                                 city_idx + 1,
                                 len(city_queries),
                                 actual_location_name_used_for_city,
-                                is_final_city_in_pass=(
-                                    city_idx + 1 == len(city_queries)
-                                ),
+                                is_final_city_in_pass=(city_idx + 1 == len(city_queries)),
                             )
 
         if hotel_options_this_pass:
-            existing_hotel_ids_dates = {
-                (h.get("name", ""), h.get("check_in_date", ""))
-                for h in all_hotel_options_global
-            }
-            newly_added_count = 0
-            for h_new in hotel_options_this_pass:
-                hotel_key = (
-                    h_new.get("name", "UnknownHotel"),
-                    h_new.get("location", "UnknownLocation"),
-                    h_new.get("check_in_date", "UnknownDate"),
-                    h_new.get("total_price", 0.0),
+
+            def hotel_key(row):
+                return row.get("id") or (
+                    row.get("name"),
+                    row.get("location"),
+                    row.get("check_in_date"),
+                    row.get("total_price"),
+                    row.get("api_points_earned"),
+                    row.get("refundability"),
                 )
-                is_duplicate = False
-                for existing_h in all_hotel_options_global:
-                    existing_key = (
-                        existing_h.get("name", "UnknownHotel"),
-                        existing_h.get("location", "UnknownLocation"),
-                        existing_h.get("check_in_date", "UnknownDate"),
-                        existing_h.get("total_price", 0.0),
-                    )
-                    if hotel_key == existing_key:
-                        is_duplicate = True
-                        break
-                if not is_duplicate:
-                    all_hotel_options_global.append(h_new)
+
+            seen = {hotel_key(row) for row in all_hotel_options_global}
+            newly_added_count = 0
+            for row in hotel_options_this_pass:
+                key = hotel_key(row)
+                if key not in seen:
+                    seen.add(key)
+                    all_hotel_options_global.append(row)
                     newly_added_count += 1
             if newly_added_count > 0:
-                logging.info(
+                logger.info(
                     f"Pass {current_iteration_pass}: Added {newly_added_count} new unique hotel options. Total unique options so far: {len(all_hotel_options_global)}"
                 )
             else:
-                logging.info(
+                logger.info(
                     f"Pass {current_iteration_pass}: No new unique hotel options found in this pass. Total unique options: {len(all_hotel_options_global)}"
                 )
         else:
-            logging.info(
+            logger.info(
                 f"Pass {current_iteration_pass}: No hotel options found in this date window across all cities searched in this pass."
             )
 
         if all_hotel_options_global:
-            temp_itinerary, temp_cost, temp_total_lp = [], 0.0, current_lp_balance
+            temp_total_lp = current_lp_balance
             if optimization_strategy == "minimize_cost_for_target_lp":
                 _, _, temp_total_lp = select_cheapest_stays_for_target_lp(
                     all_hotel_options_global,
@@ -1138,49 +616,45 @@ def find_best_hotel_deals(
             break
 
         if running_total_lp_achieved >= target_loyalty_points:
-            logging.info(
+            logger.info(
                 f"Target LP of {target_loyalty_points} met or exceeded ({running_total_lp_achieved}). Stopping iterative search."
             )
             break
 
-        current_search_pass_start_date = current_search_pass_end_date + timedelta(
-            days=1
-        )
+        current_search_pass_start_date = current_search_pass_end_date + timedelta(days=1)
         current_search_pass_end_date = min(
             current_search_pass_start_date + timedelta(days=29),
             absolute_max_end_date_for_search,
         )
 
         if current_search_pass_start_date > current_search_pass_end_date:
-            logging.warning(
+            logger.warning(
                 "Iterative search: No more valid future dates to search within limits. Stopping."
             )
             break
         if not date_range_chunk_for_pass and not iterative_search_for_lp_target:
-            logging.warning(
+            logger.warning(
                 "Initial date range was empty and iterative search is not enabled. Stopping."
             )
             break
 
-        logging.info(
+        logger.info(
             f"Target LP not yet met ({running_total_lp_achieved}/{target_loyalty_points}). Extending search. Next pass window: {current_search_pass_start_date.strftime('%m/%d/%Y')} to {current_search_pass_end_date.strftime('%m/%d/%Y')}"
         )
 
     if not all_hotel_options_global:
-        logging.info("No hotel options found after all search attempts.")
+        logger.info("No hotel options found after all search attempts.")
         return [], [], 0.0, current_lp_balance
 
-    logging.info(
+    logger.info(
         f"Performing final optimization on {len(all_hotel_options_global)} collected hotel options."
     )
     if optimization_strategy == "minimize_cost_for_target_lp":
-        final_itinerary, total_cost, total_points_earned = (
-            select_cheapest_stays_for_target_lp(
-                all_hotel_options_global,
-                target_loyalty_points,
-                current_lp_balance,
-                miles_value_rate,
-            )
+        final_itinerary, total_cost, total_points_earned = select_cheapest_stays_for_target_lp(
+            all_hotel_options_global,
+            target_loyalty_points,
+            current_lp_balance,
+            miles_value_rate,
         )
     elif optimization_strategy == "dp_minimize_cost":
         final_itinerary, total_cost, total_points_earned = select_optimal_stays_dp(
@@ -1190,14 +664,12 @@ def find_best_hotel_deals(
             miles_value_rate,
         )
     elif optimization_strategy == "fastest_calendar_time_lp":
-        final_itinerary, total_cost, total_points_earned = (
-            select_fastest_calendar_time_lp(
-                all_hotel_options_global,
-                target_loyalty_points,
-                current_lp_balance,
-                max_overlaps=max_overlaps,  # And here for the final call
-                miles_value_rate=miles_value_rate,
-            )
+        final_itinerary, total_cost, total_points_earned = select_fastest_calendar_time_lp(
+            all_hotel_options_global,
+            target_loyalty_points,
+            current_lp_balance,
+            max_overlaps=max_overlaps,  # And here for the final call
+            miles_value_rate=miles_value_rate,
         )
     else:  # Default to points_per_dollar
         final_itinerary, total_cost, total_points_earned = select_optimal_stays_ppd(
@@ -1211,12 +683,11 @@ def find_best_hotel_deals(
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(
         description="Scrape AAdvantage Hotels for high points-per-dollar stays."
     )
-    parser.add_argument(
-        "city", type=str, help="The city to search for hotels (e.g., 'Phoenix')"
-    )
+    parser.add_argument("city", type=str, help="The city to search for hotels (e.g., 'Phoenix')")
     parser.add_argument(
         "--target-lp",
         type=int,
@@ -1295,23 +766,21 @@ def main():
     )
     args = parser.parse_args()
 
-    final_session_headers: Dict[str, str] = {}
+    final_session_headers: dict[str, str] = {}
     if args.headers_file:
         try:
-            with open(args.headers_file, "r") as f:
+            with open(args.headers_file) as f:
                 final_session_headers = json.load(f)
-            logging.info(f"Using session headers from: {args.headers_file}")
+            logger.info(f"Using session headers from: {args.headers_file}")
         except FileNotFoundError:
-            logging.error(f"Headers file not found: {args.headers_file}.")
+            logger.error(f"Headers file not found: {args.headers_file}.")
         except json.JSONDecodeError:
-            logging.error(
-                f"Error decoding JSON from headers file: {args.headers_file}."
-            )
+            logger.error(f"Error decoding JSON from headers file: {args.headers_file}.")
         except Exception as e:
-            logging.error(f"Error loading headers from {args.headers_file}: {e}.")
+            logger.error(f"Error loading headers from {args.headers_file}: {type(e).__name__}.")
 
     if not final_session_headers:
-        logging.warning(
+        logger.warning(
             "No/invalid headers file. Making unauthenticated requests. Results may be limited."
         )
 
@@ -1340,7 +809,7 @@ def main():
     if not all_hotel_options_main:
         results_logger.info("No hotel values to display.")
     else:
-        logging.info(f"\nCollected {len(all_hotel_options_main)} hotel options.")
+        logger.info(f"\nCollected {len(all_hotel_options_main)} hotel options.")
         print_hotel_values_summary(all_hotel_options_main)
 
         if final_itinerary_main:
@@ -1385,7 +854,7 @@ def main():
             results_logger.info(
                 f"Could not form an itinerary to meet target {args.target_lp} points."
             )
-    logging.info("\n--- Search Complete ---")
+    logger.info("\n--- Search Complete ---")
 
 
 if __name__ == "__main__":

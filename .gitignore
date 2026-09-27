@@ -8,3 +8,19 @@ wheels/
 
 # Virtual environments
 .venv
+.venv-*/
+.env
+.env.*
+!.env.example
+.local/
+my_headers.json
+*_headers.json
+headers.json
+*.sqlite*
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+playwright-report/
+test-results/
+node_modules/

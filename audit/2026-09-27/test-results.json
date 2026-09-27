@@ -1,0 +1,95 @@
+{
+  "tests_run": 26,
+  "passed": 5,
+  "known_invariant_failures": [
+    {
+      "test": "__main__.CalculationDefects.test_F02_active_2026_partner_bonus_is_25_percent",
+      "failure": "AssertionError: 200 != 250"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F03_partner_lp_bonus_does_not_create_redeemable_miles",
+      "failure": "AssertionError: 1200 != 1000"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F04_cheapest_returns_balance_including_starting_lp",
+      "failure": "AssertionError: 1000 != 51000"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F04_iterative_search_stops_when_overall_target_is_met",
+      "failure": "AssertionError: 4 != 1"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F04_ppd_returns_balance_including_starting_lp",
+      "failure": "AssertionError: 1000 != 51000"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F05_cheapest_bonus_respects_chronological_order",
+      "failure": "AssertionError: 2000 != 0"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F05_ppd_bonus_respects_chronological_order",
+      "failure": "AssertionError: 2000 != 0"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F06_dp_does_not_discard_a_cheaper_sufficient_offer",
+      "failure": "AssertionError: 1000.0 != 100"
+    },
+    {
+      "test": "__main__.CalculationDefects.test_F07_dp_recognizes_an_attainable_target_with_bonus",
+      "failure": "AssertionError: 0 != 1"
+    },
+    {
+      "test": "__main__.DataAndSecurityDefects.test_F08_result_fetch_visits_more_than_first_page",
+      "failure": "AssertionError: 1 not greater than 1"
+    },
+    {
+      "test": "__main__.DataAndSecurityDefects.test_F09_malformed_offer_does_not_discard_valid_offers",
+      "failure": "AttributeError: 'NoneType' object has no attribute 'get'"
+    },
+    {
+      "test": "__main__.DataAndSecurityDefects.test_F09_unknown_price_is_not_a_free_stay",
+      "failure": "-   'user_rating': 8.5}]"
+    },
+    {
+      "test": "__main__.DataAndSecurityDefects.test_F10_double_quoted_curl_preserves_headers",
+      "failure": "AssertionError: None != 'session=synthetic'"
+    },
+    {
+      "test": "__main__.DataAndSecurityDefects.test_F11_invalid_header_error_does_not_log_secret",
+      "failure": "AssertionError: 'synthetic-audit-secret-not-a-real-token' unexpectedly found in \"ERROR:root:Error during search initiation for Phoenix: Invalid leading whitespace, reserved character(s), or return character(s) in header value: ' synthetic-audit-secret-not-a-real-token'\""
+    },
+    {
+      "test": "__main__.DataAndSecurityDefects.test_F12_initial_window_respects_configured_search_horizon",
+      "failure": "AssertionError: 11 not less than or equal to 3"
+    },
+    {
+      "test": "__main__.FixedTripProductGaps.test_F01_a_weeklong_trip_covers_every_night",
+      "failure": "'10/07/2026'"
+    },
+    {
+      "test": "__main__.FixedTripProductGaps.test_F01_checkout_date_is_exclusive_for_a_trip",
+      "failure": "AssertionError: 8 != 7"
+    },
+    {
+      "test": "__main__.FixedTripProductGaps.test_F01_search_also_prices_the_continuous_stay",
+      "failure": "AssertionError: ('10/01/2026', '10/04/2026') not found in {('10/04/2026', '10/05/2026'), ('10/02/2026', '10/03/2026'), ('10/03/2026', '10/04/2026'), ('10/01/2026', '10/02/2026')}"
+    },
+    {
+      "test": "__main__.StreamlitBehavior.test_F13_results_survive_a_widget_rerun",
+      "failure": "AssertionError: 0 != 6"
+    },
+    {
+      "test": "__main__.StreamlitBehavior.test_F14_missing_credentials_stops_personalized_search",
+      "failure": "Calls: [call(city_queries=['Las Vegas'], start_date=datetime.date(2026, 9, 27), end_date=datetime.date(2026, 9, 28), session_headers={}, target_loyalty_points=200000, progress_callback=<function streamlit_progress_callback at 0x7cb65d7c82c0>, aa_card_bonus=True, aa_card_miles_rate=1, optimization_strategy='points_per_dollar', iterative_search_for_lp_target=False, current_lp_balance=0, max_overlaps=None, miles_value_rate=0.015)]."
+    },
+    {
+      "test": "__main__.StreamlitBehavior.test_F15_incomplete_itinerary_has_an_explicit_shortfall",
+      "failure": "AssertionError: False is not true"
+    }
+  ],
+  "unexpected_failures": [],
+  "unexpected_errors": [],
+  "unexpected_successes": [],
+  "all_network_requests_blocked": true,
+  "synthetic_credentials_only": true
+}

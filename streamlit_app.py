@@ -248,7 +248,7 @@ current_lp_balance_input = st.sidebar.number_input(
     min_value=0,
     value=0,
     step=100,
-    help="Enter your current AAdvantage Loyalty Points balance to factor in status bonuses.",
+    help="Enter your current AAdvantage LP balance. Active partner bonuses are configured in the new service interface; no bonus is inferred from your balance here.",
     key="current_lp_balance_input",
 )
 
@@ -281,7 +281,7 @@ if st.sidebar.button("Search for Hotel Deals"):
             else:
                 st.sidebar.error("cURL parsing function is not available.")
         except Exception as e:
-            st.sidebar.error(f"Error parsing cURL command for this search: {e}")
+            st.sidebar.error("Could not read that cURL command. Copy the request again.")
             # local_session_headers_for_search remains {}
     elif auth_method_on_click == "Manual Cookie/XSRF":
         cookie_val = st.session_state.get("cookie_input_value", "")
@@ -407,7 +407,7 @@ if st.sidebar.button("Search for Hotel Deals"):
             and len(cities_to_process_log) > 1
         ):
             status_text_placeholder.text(
-                f"Initiating search for {city_query_for_backend} (first of {len(cities_to_process_log)} cities). Full multi-city backend processing is pending."
+                f"Initiating search for {city_query_for_backend} (first of {len(cities_to_process_log)} cities). All selected cities will be searched."
             )
 
         try:
@@ -442,6 +442,11 @@ if st.sidebar.button("Search for Hotel Deals"):
                 )
             )
 
+            st.session_state.last_search_result = {
+                "options": all_hotel_options, "itinerary": final_itinerary,
+                "cost": total_cost, "projected_lp": total_points_earned,
+                "starting_lp": current_lp_balance_input,
+            }
             progress_bar_placeholder.empty()
             status_text_placeholder.empty()
 
@@ -738,7 +743,7 @@ if st.sidebar.button("Search for Hotel Deals"):
                                     )
                                     .properties()
                                 )
-                                st.altair_chart(hist_chart, use_container_width=True)
+                                st.altair_chart(hist_chart, width="stretch")
                             except Exception as ex:
                                 st.write(
                                     f"Could not generate Altair chart for {chart_title}: {ex}. Falling back."
@@ -805,12 +810,22 @@ if st.sidebar.button("Search for Hotel Deals"):
         except Exception as e:
             progress_bar_placeholder.empty()
             status_text_placeholder.empty()
-            st.error(f"An error occurred during the search: {e}")
-            st.exception(e)
+            st.error("The search could not be completed. Check your connection and search limits, then try again.")
+            logging.error("Search failed: %s", type(e).__name__)
 else:
-    st.info(
-        "Enter search parameters in the sidebar and click 'Search for Hotel Deals'."
-    )
+    saved = st.session_state.get("last_search_result")
+    if saved:
+        st.subheader("Your previous search")
+        st.caption("These results stay here while you adjust the next search. Run a new search to refresh prices.")
+        left, middle, right = st.columns(3)
+        left.metric("Earned LP", f"{saved['projected_lp']-saved['starting_lp']:,}")
+        middle.metric("Projected LP balance", f"{saved['projected_lp']:,}")
+        right.metric("Total cost", f"${saved['cost']:,.2f}")
+        st.dataframe(pd.DataFrame(saved["itinerary"]), width="stretch")
+        with st.expander("All quotes from this search"):
+            st.dataframe(pd.DataFrame(saved["options"]), width="stretch")
+    else:
+        st.info("Enter search parameters in the sidebar and click 'Search for Hotel Deals'.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Authentication Details")
