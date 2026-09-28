@@ -1,3 +1,7 @@
+[server]
+# Detect imported Python changes when Cloud updates the mounted checkout.
+fileWatcherType = "poll"
+
 [theme]
 # American Airlines AAdvantage Inspired Theme
 

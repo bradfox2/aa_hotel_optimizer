@@ -331,7 +331,9 @@ window.addEventListener('hashchange',consumeLoginFragment,{signal:listeners.sign
 async function initialize(){
   const start=new Date();start.setDate(start.getDate()+28);const end=new Date(start);end.setDate(end.getDate()+4);
   $('check-in').value=iso(start);$('check-out').value=iso(end);$('check-in').min=$('check-out').min=iso(new Date());
-  try{state.config=await api('/v1/config');await loadMe();
+  try{state.config=await api('/v1/config');
+    if(preview()&&state.config.preview_protocol!==3)throw new Error('The planner is updating. Refresh this page in a moment to load the latest connection.');
+    await loadMe();
     await consumeLoginFragment();
     restoreDraft();
     $('trial-note').textContent=preview()?'Free preview · no account or payment required':`${number(state.config.free_searches)} free searches. No card required.`;

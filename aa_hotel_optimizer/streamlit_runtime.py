@@ -132,6 +132,7 @@ class PreviewSession:
         if (method, path) == ("GET", "/v1/config"):
             return {
                 "deployment": "streamlit",
+                "preview_protocol": self.VERSION,
                 "local_preview": False,
                 "billing_enabled": False,
                 "billing_test_mode": False,
