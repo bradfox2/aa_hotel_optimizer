@@ -11,6 +11,18 @@ from .streamlit_runtime import PreviewSession
 STATIC = Path(__file__).parent / "service" / "static"
 
 
+def preview_session():
+    previous = st.session_state.get("lp_preview")
+    if getattr(previous, "VERSION", None) != PreviewSession.VERSION or not isinstance(
+        previous, PreviewSession
+    ):
+        if previous is not None:
+            previous.disconnect()
+        st.session_state.lp_preview = PreviewSession()
+        st.session_state.lp_response = None
+    return st.session_state.lp_preview
+
+
 @st.cache_resource
 def component_assets(version):
     html = (STATIC / "index.html").read_text().split("<body>", 1)[1].split("</body>", 1)[0]
@@ -51,17 +63,19 @@ def render():
         [data-testid="stVerticalBlock"]{gap:0}
         </style>"""
     )
-    if "lp_preview" not in st.session_state:
-        st.session_state.lp_preview = PreviewSession()
+    preview_session()
+    # A protocol change must also remount the client, clearing pending requests
+    # and callbacks that belonged to the old connection transport.
+    widget_key = f"lp_planner_v{PreviewSession.VERSION}"
 
     def receive():
-        event = st.session_state.lp_planner.get("request")
+        event = st.session_state[widget_key].get("request")
         if event:
-            st.session_state.lp_response = st.session_state.lp_preview.handle(event)
+            st.session_state.lp_response = preview_session().handle(event)
 
     planner = st.components.v2.component("lp_planner", html=html, css=css, js=js)
     planner(
-        key="lp_planner",
+        key=widget_key,
         data={"response": st.session_state.get("lp_response")},
         on_request_change=receive,
         height="content",

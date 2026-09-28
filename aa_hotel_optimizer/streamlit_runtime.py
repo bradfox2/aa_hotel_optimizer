@@ -81,6 +81,8 @@ def example(request):
 
 
 class PreviewSession:
+    VERSION = 3
+
     def __init__(self):
         self.engine = create_engine(
             "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}

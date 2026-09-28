@@ -2,6 +2,7 @@
 
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
@@ -15,6 +16,14 @@ if app.exception:
     raise RuntimeError([exception.message for exception in app.exception])
 assert "lp_preview" in app.session_state
 print("PASS Streamlit mounts the new planner by default")
+
+# Cloud can preserve Session State during a source update. A stale runtime must
+# not keep accepting the old connection protocol underneath the new UI.
+app.session_state["lp_preview"] = SimpleNamespace(VERSION=2, disconnect=lambda: None)
+app.run()
+assert not app.exception, [e.message for e in app.exception]
+assert app.session_state["lp_preview"].VERSION == 3
+print("PASS Open Streamlit sessions upgrade to the current connection protocol")
 
 app = AppTest.from_file(
     Path(__file__).resolve().parents[1] / "streamlit_app.py", default_timeout=30
