@@ -28,6 +28,7 @@ export async function providerRequest(task) {
     const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('lp-optimizer:'+session.uuid));
     const account_fingerprint=Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('');
     const account={account_fingerprint,account_label:safeString(session.firstName,60)};
+    if(task.account_fingerprint && task.account_fingerprint!==account_fingerprint)return {status:'account_changed'};
     if(task.kind==='session')return {status:'ok',...account,data:{}};
     const p=task.payload||{};
     let data;

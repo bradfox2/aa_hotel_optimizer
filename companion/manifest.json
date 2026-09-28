@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "LP Optimizer Companion (local beta)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Compare AA Hotels offers for searches you start in LP Optimizer. Your AA session stays in your browser.",
+  "icons": {"16":"icon-16.png","32":"icon-32.png","48":"icon-48.png","128":"icon-128.png"},
   "permissions": ["storage", "scripting", "alarms"],
   "host_permissions": ["https://www.aadvantagehotels.com/*", "http://127.0.0.1/*"],
   "background": {"service_worker": "background.js", "type": "module"},
-  "content_scripts": [{"matches": ["http://127.0.0.1/*"], "js": ["config.js", "content.js"], "run_at": "document_idle"}],
+  "content_scripts": [{"matches": ["http://127.0.0.1/*"], "js": ["config.js", "content.js"], "run_at": "document_idle", "all_frames": true}],
   "action": {"default_title": "LP Optimizer", "default_popup": "popup.html"},
   "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}
 }

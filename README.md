@@ -52,14 +52,21 @@ market-wide inventory, reward posting, or that a quoted room remains bookable.
 This is a **public planner preview plus a local/private-beta service implementation**,
 not a launched paid service. Streamlit shares the redesigned interface and engine:
 trip and status comparisons, session history and JSON downloads work there.
-Personal live searches still require the original temporary cURL connection.
-Streamlit keeps credentials in session memory, expires them after 30 minutes,
-and limits concurrent searches. It does not host accounts, payments or agent APIs.
+Personal searches use the Chrome companion. Connect once and reuse the AA browser
+session across visits and Chrome restarts; sign in again when AA expires it.
+The companion can reopen AA Hotels in the background when needed. No cURL or AA
+login token is sent to the new planner. Streamlit receives bounded leased task
+results into a separate in-memory store per browser session. It does not host
+email accounts, payments or agent APIs. The original manual UI is only a fallback.
 The full app and actual Chrome companion are exercised with mocked provider
 responses. A real personalized AA Hotels session, live Stripe test account,
 Email delivery and deployed PostgreSQL still need integration validation.
 
-The companion has not been published in the Chrome Web Store. The live provider
+The companion has not been published in the Chrome Web Store. The public
+connection dialog provides a domain-bound beta ZIP and one-time manual install
+instructions. [Store submission material](companion/STORE_LISTING.md) is prepared;
+Google publisher registration and review are still needed for normal installation.
+The standalone service's live provider
 adapter is opt-in (`LP_PROVIDER_ENABLED=true`); provider commercial access must be
 resolved before a paid release. The app does not contain a public third-party
 OAuth integration or book hotels automatically.

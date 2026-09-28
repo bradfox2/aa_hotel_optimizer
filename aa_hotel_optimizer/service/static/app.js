@@ -62,7 +62,7 @@ async function loadMe() {
   const connection=state.me?.connection;
   const connected=connection?.state==='connected';
   $('connection-dot').classList.toggle('connected',connected);
-  $('connection-title').textContent=connected?(preview()?'AA Hotels session added':'AA Hotels connected'):connection?.state==='reauth_required'?'Sign in to AA Hotels again':connection?.state==='browser_required'?'Open your AA Hotels tab':'Connect AA Hotels';
+  $('connection-title').textContent=connected?'AA Hotels connected':connection?.state==='reauth_required'?'Sign in to AA Hotels again':connection?.state==='browser_required'?'Open your AA Hotels tab':'Connect AA Hotels';
   $('connection-subtitle').textContent=connected?(connection.account_label || 'Your personal offers are ready'):'Use your personal hotel offers';
 }
 function signIn(reason='Save your searches and compare your personal AA Hotels offers.') {
@@ -84,21 +84,77 @@ async function consumeLogin(raw) {
   catch(error){signIn(error.message);}
 }
 
+const previewReplies=new Map();
+function askCompanion(type,task){
+  return new Promise((resolve,reject)=>{
+    const id=crypto.randomUUID();
+    const timeout=setTimeout(()=>{previewReplies.delete(id);reject(new Error('The browser companion did not respond. Reload this tab and reconnect.'));},45000);
+    previewReplies.set(id,result=>{clearTimeout(timeout);resolve(result);});
+    window.postMessage({source:'lp-optimizer',type,id,task},location.origin);
+  });
+}
+async function workPreview(){
+  if(!preview()||state.previewWorking||!state.previewCompanion||!['queued','running'].includes(state.result?.status))return;
+  state.previewWorking=true;
+  try{
+    while(['queued','running'].includes(state.result?.status)){
+      const {task}=await api('/v1/session/tasks/claim',{method:'POST',body:{}});
+      if(!task)break;
+      const result=await askCompanion('PREVIEW_TASK',task);
+      const updated=await api('/v1/session/tasks/'+task.id+'/result',{method:'POST',body:{...result,lease_token:task.lease_token}});
+      showResult(updated);schedulePoll(updated);
+      if(result.status!=='ok'){await loadMe();break;}
+      if(['queued','running'].includes(updated.status))await new Promise(resolve=>setTimeout(resolve,2200));
+    }
+  }catch(error){notice(error.message);await loadMe().catch(()=>{});}
+  finally{state.previewWorking=false;}
+}
+async function restorePreview(){
+  if(!preview()||!state.previewCompanion||state.previewRestoring||state.previewRestored)return;
+  state.previewRestoring=true;
+  try{
+    const result=await askCompanion('PREVIEW_RESTORE');
+    if(result.status!=='not_connected'){
+      await api('/v1/session/connection',{method:'POST',body:result}).catch(()=>{});
+      await loadMe();
+    }
+    state.previewRestored=true;
+  }catch{/* A manual Connect remains available if the companion is updating. */}
+  finally{state.previewRestoring=false;}
+}
 function previewStatus() {
-  modal('<h2>The new planner is here.</h2><p>Compare whole stays and split reservations, plan a status goal, and download a booking checklist.</p><p>This preview is free. Email accounts, paid passes, membership, and the Chrome companion are still being connected. Searches are kept for this session only.</p><button id="preview-connect" class="button primary full">Connect a temporary AA Hotels session</button><button id="preview-pricing" class="button quiet full">See planned pricing</button>','PUBLIC PREVIEW');
+  modal('<h2>The new planner is here.</h2><p>Connect the Chrome companion, sign in normally on AA Hotels, and compare your personal offers. Your AA login stays in your browser.</p><p>This preview is free. Email accounts and purchases are still being connected. Searches are kept for this session only.</p><button id="preview-connect" class="button primary full">Connect AA Hotels</button><button id="preview-pricing" class="button quiet full">See planned pricing</button>','PUBLIC PREVIEW');
   $('preview-connect').onclick=previewConnection;
   $('preview-pricing').onclick=()=>pricing();
 }
 function previewConnection() {
+  const installed=state.previewCompanion;
   const connected=state.me?.connection.state==='connected';
-  modal(`<h2>${connected?'Your temporary session':'Connect your personal offers'}</h2><p>The easy Chrome connection is coming. For now, live searches use the same temporary cURL connection as the original app.</p><ol class="steps"><li><strong>Sign in and search on AA Hotels</strong><a class="button outline small" href="https://www.aadvantagehotels.com" target="_blank" rel="noopener noreferrer">Open AA Hotels ↗</a></li><li><strong>Copy the search request</strong><small>In Chrome, open Developer tools → Network. Search for “searchRequest”, right-click the request, then Copy → Copy as cURL (bash).</small></li><li><strong>Paste it below</strong><small>We read the session headers. The command is never executed.</small></li></ol><form id="session-form"><label>AA Hotels cURL request<textarea id="session-curl" rows="4" maxlength="64000" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the copied request"></textarea></label><button id="session-connect" class="button primary full">Use this session</button></form>${connected?'<button id="session-disconnect" class="button quiet full">Disconnect AA Hotels</button>':''}<p class="dialog-note">This request contains login credentials. The preview sends them only to AA Hotels and keeps them in this server session’s memory for up to 30 minutes. They are not saved to disk. Do not share the request.</p>`,'TEMPORARY CONNECTION');
-  $('session-form').onsubmit=async event=>{
-    event.preventDefault();$('session-connect').disabled=true;
-    const curl=$('session-curl').value;$('session-curl').value='';
-    try{await api('/v1/session/connection',{method:'POST',body:{curl}});await loadMe();$('dialog').close();toast('Session added. Start a search to check your offers.');}
-    catch(error){modalError(error);$('session-connect').disabled=false;}
+  modal(`<h2>Your rates. Your browser.</h2><p>Connect once. The companion remembers this browser and reuses your AA Hotels sign-in for future searches. No commands or tokens to copy.</p><ol class="steps"><li><strong>Add the Chrome companion</strong><small>${installed?'Companion detected. You’re ready to connect.':'Chrome Web Store publication is pending. The private beta uses a one-time manual install.'}</small>${installed?'':`<button id="download-companion" class="button outline small">Download beta companion</button><details class="install-help"><summary>One-time beta install</summary><p>1. Download and unzip the companion.<br>2. Open <strong>chrome://extensions</strong> in Chrome and turn on Developer mode.<br>3. Click <strong>Load unpacked</strong>, choose the unzipped folder, then reload this planner.</p><p>The published version will install directly from the Chrome Web Store.</p></details>`}</li><li><strong>Sign in to AA Hotels</strong><small>Sign in once during setup. We reuse that session and open the hotel tab when needed. AA may occasionally require you to sign in again.</small><a class="button outline small" href="https://www.aadvantagehotels.com" target="_blank" rel="noopener noreferrer">Open AA Hotels ↗</a></li><li><strong>Connect this browser</strong><small>We’ll check that your personal offers are available.</small><button id="pair-button" class="button primary small" ${installed?'':'disabled'}>Connect AA Hotels →</button></li></ol><p id="pair-status" class="dialog-note">${installed?'Ready when you are.':'Install the companion once, then reload this page.'}</p>${connected?'<button id="session-disconnect" class="button quiet full">Disconnect AA Hotels</button>':''}`,'CONNECT AA HOTELS');
+  if($('download-companion'))$('download-companion').onclick=async()=>{
+    $('download-companion').disabled=true;
+    try{
+      const file=await api('/v1/companion/download');
+      const bytes=Uint8Array.from(atob(file.base64),c=>c.charCodeAt(0));
+      const url=URL.createObjectURL(new Blob([bytes],{type:'application/zip'}));
+      const a=document.createElement('a');a.href=url;a.download=file.filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      root.querySelector('.install-help').open=true;
+    }catch(error){modalError(error);}
+    finally{if($('download-companion'))$('download-companion').disabled=false;}
   };
-  if($('session-disconnect'))$('session-disconnect').onclick=async()=>{await api('/v1/session/connection',{method:'DELETE'});await loadMe();$('dialog').close();toast('AA Hotels disconnected.');};
+  $('pair-button').onclick=async()=>{
+    $('pair-button').disabled=true;$('pair-status').textContent='Checking your AA Hotels tab…';
+    try{
+      const result=await askCompanion('PREVIEW_CONNECT');
+      await api('/v1/session/connection',{method:'POST',body:result});
+      await loadMe();$('dialog').close();toast('Connected. This browser will remember your AA Hotels connection.');
+    }catch(error){modalError(error);if($('pair-button'))$('pair-button').disabled=false;}
+  };
+  if($('session-disconnect'))$('session-disconnect').onclick=async()=>{
+    await api('/v1/session/connection',{method:'DELETE'});
+    askCompanion('PREVIEW_DISCONNECT').catch(()=>{});
+    await loadMe();$('dialog').close();toast('AA Hotels disconnected.');
+  };
 }
 function connectionModal() {
   if(preview())return previewConnection();
@@ -115,7 +171,8 @@ function connectionModal() {
 $('connect-button').onclick=connectionModal;
 window.addEventListener('message',async event=>{
   if(event.source!==window || event.origin!==location.origin || event.data?.source!=='lp-companion')return;
-  if(event.data.type==='READY'){state.companion=true;if($('pair-button')){$('pair-button').disabled=false;$('pair-status').textContent='Companion detected. Ready to connect.';}}
+  if(event.data.type==='PREVIEW_REPLY'){const resolve=previewReplies.get(event.data.id);if(resolve){previewReplies.delete(event.data.id);resolve(event.data.result);}return;}
+  if(event.data.type==='READY'){state.companion=true;state.previewCompanion=Boolean(event.data.preview);restorePreview();if($('pair-button')){$('pair-button').disabled=preview()&&!state.previewCompanion;$('pair-status').textContent=preview()&&!state.previewCompanion?'Update the beta companion, then reload this tab.':'Companion detected. Ready to connect.';}}
   if(event.data.type==='PAIRED'){
     await loadMe();
     if($('pair-status'))$('pair-status').textContent=event.data.ok?'Browser connected. Keep your AA Hotels tab open.':(event.data.message || 'Open AA Hotels, sign in, and try again.');
@@ -155,7 +212,7 @@ function pricing(exhausted=false) {
   if(preview()){
     $('dialog-eyebrow').textContent='PLANNED PRICING';
     $('dialog-content').querySelector('p').textContent='This preview is free. At launch: 2 free searches, then a trip pass or monthly membership. Prices in USD.';
-    $('dialog-content').querySelector('.dialog-note').textContent='Purchases are unavailable in this preview. Email accounts, payments, and the published Chrome companion are still being connected.';
+    $('dialog-content').querySelector('.dialog-note').textContent='Purchases are unavailable in this preview. Email accounts and payments are still being connected; the companion is awaiting Chrome Web Store publication.';
   }
 }
 async function startCheckout(product,buttonId) {
@@ -244,7 +301,7 @@ function showResult(result, selected=0) {
 }
 function planText(plan,result){return `${result.sample?'EXAMPLE — fictional quotes\n':''}LP Optimizer booking plan\n${number(plan.earned_lp)} estimated LP · ${money(plan.cost_cents)} total · ${plan.lp_per_dollar} LP/$\n\n${plan.offers.map((q,i)=>`${i+1}. ${q.name}, ${q.city}\n   ${q.check_in} to ${q.check_out} · ${money(q.price_cents)} · ${number(q.base_lp)} hotel LP`).join('\n')}\n\nConfirm final prices, eligible rewards, and reservation terms on AA Hotels. No bookings have been made.`;}
 async function copy(value,message){try{await navigator.clipboard.writeText(value);toast(message);}catch{toast('Clipboard access is unavailable. Use Download JSON to save this plan.');}}
-function schedulePoll(result){clearTimeout(state.poll);if(['queued','running','browser_required','reauth_required','pairing'].includes(result.status))state.poll=setTimeout(async()=>{try{const fresh=await api('/v1/searches/'+result.id);showResult(fresh);schedulePoll(fresh);}catch(error){notice(error.message);}},3000);}
+function schedulePoll(result){clearTimeout(state.poll);if(['queued','running','browser_required','reauth_required','pairing'].includes(result.status))state.poll=setTimeout(async()=>{try{const fresh=await api('/v1/searches/'+result.id);showResult(fresh);schedulePoll(fresh);workPreview();}catch(error){notice(error.message);}},3000);}
 async function runSearch(sample=false) {
   if(state.busy)return;
   $('form-error').hidden=true;
@@ -253,7 +310,7 @@ async function runSearch(sample=false) {
   if(!sample&&!state.config.provider_enabled){notice('Live offers are not enabled in this local preview. You can explore the example and account flows.');return;}
   if(!sample&&state.me?.connection.state!=='connected')return connectionModal();
   state.busy=true;$('results').setAttribute('aria-busy','true');$('search-button').disabled=$('demo-button').disabled=true;
-  try{const body=formRequest();const result=await api(sample?'/v1/demo':'/v1/searches',{method:'POST',body,headers:sample?{}:{'Idempotency-Key':crypto.randomUUID()}});clearTimeout(state.poll);showResult(result);schedulePoll(result);if(!sample){await loadMe();window.postMessage({source:'lp-optimizer',type:'PING'},location.origin);}}
+  try{const body=formRequest();const result=await api(sample?'/v1/demo':'/v1/searches',{method:'POST',body,headers:sample?{}:{'Idempotency-Key':crypto.randomUUID()}});clearTimeout(state.poll);showResult(result);schedulePoll(result);if(!sample){await loadMe();workPreview();window.postMessage({source:'lp-optimizer',type:'PING'},location.origin);}}
   catch(error){$('form-error').textContent=error.message;$('form-error').hidden=false;if(error.code==='search_limit'){await loadMe();pricing(true);}}
   finally{state.busy=false;$('results').setAttribute('aria-busy','false');$('search-button').disabled=$('demo-button').disabled=false;}
 }
@@ -279,12 +336,13 @@ async function initialize(){
     restoreDraft();
     $('trial-note').textContent=preview()?'Free preview · no account or payment required':`${number(state.config.free_searches)} free searches. No card required.`;
     if(preview()){
+      restorePreview();
       $('history-button').textContent='Session searches';
-      notice('New planner preview · Live searches still use a temporary AA Hotels session. Email sign-in, payments, and the Chrome companion are coming next.');
+      notice('Free preview · Connect the Chrome companion for your personal AA Hotels offers. Email accounts and payments are coming next.');
       const guide=root.querySelector('a[href="/static/agents.html"]');
       guide.href='/?view=classic';guide.textContent='Original app ↗';guide.target='_top';
       root.querySelector('.brand').href='/';root.querySelector('.brand').target='_top';
-      $('privacy-button').onclick=()=>modal('<h2>Your preview session.</h2><p>Searches and a temporary AA Hotels session stay in this server session’s memory. They are not saved to a database or shared with other visitors. Reconnecting, disconnecting, or the 30-minute expiry clears the stored AA session.</p><p>Download your plan before closing or reloading the tab. A running search may take a moment to stop. This preview does not create an email account or accept payments.</p>','DATA & PRIVACY');
+      $('privacy-button').onclick=()=>modal('<h2>Your AA login stays in your browser.</h2><p>The companion performs read-only hotel searches in your AA Hotels tab. It returns normalized hotel offers, your first name, and a one-way account fingerprint. Passwords, cookies, and AA login tokens are never sent to this planner.</p><p>Searches stay in this preview session’s memory. Download a plan before reloading or closing the tab. Disconnecting stops further comparisons. This preview does not create an email account or accept payments.</p>','DATA & PRIVACY');
     }
     const params=new URLSearchParams(location.search);
     if(params.get('billing')==='success')notice('Checkout finished. Your searches unlock after payment is confirmed. Your search details are ready below.');

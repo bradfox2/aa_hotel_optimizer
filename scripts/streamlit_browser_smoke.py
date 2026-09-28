@@ -1,6 +1,7 @@
 """Exercise the actual Cloud entrypoint and shared UI with fictional provider IO."""
 
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import time
 import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
+from zipfile import ZipFile
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -28,18 +30,15 @@ def passed(message):
 
 
 with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
-    # All production code, including streamlit_app.py, is executed unchanged.
-    # Only external AA provider functions are replaced; no real credentials.
     fixture = Path(temp) / "fixture.py"
     fixture.write_text(
         "import runpy, sys\n"
-        f"sys.path.insert(0, {str(ROOT)!r})\n"
-        "from aa_hotel_optimizer import main as provider\n"
-        "provider.discover_place_ids=lambda *a, **kw: [('Fixture City', 'fixture')]\n"
-        "provider.search_aadvantage_hotels=lambda *a, **kw: 'fixture'\n"
-        "provider.get_hotel_results=lambda *a, **kw: {'results': [{'hotel': {'id': 'fixture', 'name': 'Fixture Hotel'}, 'grandTotalPublishedPriceInclusiveWithFees': {'amount': 125}, 'rewards': 5000}]}\n"
-        f"runpy.run_path({str(ROOT / 'streamlit_app.py')!r}, run_name='__main__')\n"
+        + f"sys.path.insert(0, {str(ROOT)!r})\n"
+        + f"runpy.run_path({str(ROOT / 'streamlit_app.py')!r}, run_name='__main__')\n"
     )
+    extension = Path(temp) / "companion"
+    shutil.copytree(ROOT / "companion", extension)
+    (extension / "config.js").write_text(f"globalThis.LP_APP_ORIGIN = {json.dumps(origin)};\n")
     with (ARTIFACTS / "server.log").open("w") as log:
         server = subprocess.Popen(
             [
@@ -75,10 +74,72 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                 cached = sorted(
                     (Path.home() / ".cache/ms-playwright").glob("chromium-*/chrome-linux64/chrome")
                 )
-                browser = p.chromium.launch(
-                    **({"executable_path": str(cached[-1])} if cached else {})
+                launch_args = (
+                    {"executable_path": str(cached[-1])} if cached else {"channel": "chromium"}
                 )
-                context = browser.new_context(viewport={"width": 1440, "height": 1100})
+
+                def launch():
+                    return p.chromium.launch_persistent_context(
+                        str(Path(temp) / "profile"),
+                        headless=True,
+                        **launch_args,
+                        args=[
+                            f"--disable-extensions-except={extension}",
+                            f"--load-extension={extension}",
+                        ],
+                        ignore_default_args=["--disable-extensions"],
+                        viewport={"width": 1440, "height": 1100},
+                    )
+
+                context = launch()
+                if not context.service_workers:
+                    context.wait_for_event("serviceworker", timeout=15000)
+                signed_in = False
+                account_id = "fixture-account"
+                provider_calls = []
+
+                def provider_route(route):
+                    url = route.request.url
+                    provider_calls.append(url)
+                    if "/session" in url:
+                        data = (
+                            {"uuid": account_id, "firstName": "Example", "secret": "DO-NOT-EXPORT"}
+                            if signed_in
+                            else None
+                        )
+                    elif "/places" in url:
+                        data = [
+                            {
+                                "id": "fixture-city",
+                                "name": "Chicago, Illinois",
+                                "type": "AGODA_CITY",
+                            }
+                        ]
+                    elif "/searchRequest" in url:
+                        data = {"uuid": "fixture-search"}
+                    elif "/search/fixture-search" in url:
+                        data = {
+                            "results": [
+                                {
+                                    "hotel": {"id": "fixture", "name": "Fixture Hotel"},
+                                    "grandTotalPublishedPriceInclusiveWithFees": {"amount": 125},
+                                    "rewards": 5000,
+                                    "secret": "DO-NOT-EXPORT",
+                                }
+                            ]
+                        }
+                    else:
+                        route.fulfill(
+                            status=200,
+                            content_type="text/html",
+                            body="<!doctype html><title>Fixture AA Hotels</title>",
+                        )
+                        return
+                    route.fulfill(
+                        status=200, content_type="application/json", body=json.dumps(data)
+                    )
+
+                context.route("https://www.aadvantagehotels.com/**", provider_route)
                 page = context.new_page()
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -92,6 +153,9 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                     .startswith('"DM Sans"')
                 )
                 page.screenshot(path=str(ARTIFACTS / "desktop.png"), full_page=True)
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.screenshot(path=str(ARTIFACTS / "store-screenshot-1280x800.png"))
+                page.set_viewport_size({"width": 1440, "height": 1100})
                 passed("New planner is the default and loads the shared design and optimizer")
 
                 page.locator("#city").fill("Chicago, Illinois")
@@ -123,23 +187,30 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                 )
 
                 page.locator("#connect-button").click()
-                page.locator("#session-curl").fill(
-                    "curl https://other.example -H 'Cookie: fixture-only-secret'"
+                expect(page.locator("#session-curl")).to_have_count(0)
+                expect(page.locator("#pair-button")).to_be_enabled(timeout=10000)
+                page.locator("#pair-button").click()
+                expect(page.locator("#dialog-error")).to_contain_text(
+                    "sign in normally", timeout=30000
                 )
-                page.locator("#session-connect").click()
-                expect(page.locator("#dialog-error")).to_be_visible(timeout=15000)
-                expect(page.locator("#session-curl")).to_have_value("")
-                page.locator("#session-curl").fill(
-                    "curl https://www.aadvantagehotels.com/rest/aadvantage-hotels/searchRequest -H 'Cookie: fixture-only-secret'"
-                )
-                page.locator("#session-connect").click()
-                expect(page.locator("#dialog")).not_to_be_visible(timeout=15000)
-                expect(page.locator("#connection-title")).to_have_text("AA Hotels session added")
-                assert "fixture-only-secret" not in page.locator(".lp-app").inner_text()
+                signed_in = True
+                page.locator("#pair-button").click()
+                expect(page.locator("#dialog")).not_to_be_visible(timeout=30000)
+                expect(page.locator("#connection-title")).to_have_text("AA Hotels connected")
+                assert "DO-NOT-EXPORT" not in page.locator(".lp-app").inner_text()
                 passed(
-                    "Temporary connection validates requests and removes pasted credentials from the form"
+                    "Actual Chrome companion connects through the AA tab; no cURL or copied credentials"
                 )
-
+                page.reload()
+                expect(page.locator("#connection-title")).to_have_text(
+                    "AA Hotels connected", timeout=30000
+                )
+                expect(page.locator(".result-card")).to_be_visible()
+                page.locator("#city").fill("Chicago, Illinois")
+                for tab in context.pages:
+                    if tab.url.startswith("https://www.aadvantagehotels.com"):
+                        tab.close()
+                passed("Remembered connection restores after app reload without another login")
                 page.locator("#trip-tab").click()
                 start = date.today() + timedelta(days=28)
                 page.locator("#check-in").fill(start.isoformat())
@@ -160,7 +231,10 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                     "Search-to-results, session history and JSON download work with simulated AA responses"
                 )
 
-                mobile = browser.new_context(
+                phone_browser = p.chromium.launch(
+                    **({"executable_path": str(cached[-1])} if cached else {})
+                )
+                mobile = phone_browser.new_context(
                     viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True
                 )
                 phone = mobile.new_page()
@@ -176,10 +250,66 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                 phone.locator("#pricing-button").click()
                 expect(phone.locator("#buy-pass")).to_be_disabled()
                 phone.screenshot(path=str(ARTIFACTS / "pricing-mobile.png"), full_page=True)
+                phone.locator("#close-dialog").click()
+                phone.locator("#connect-button").click()
+                expect(phone.locator("#session-curl")).to_have_count(0)
+                with phone.expect_download() as package:
+                    phone.locator("#download-companion").click()
+                with ZipFile(package.value.path()) as zip_file:
+                    manifest = json.loads(zip_file.read("manifest.json"))
+                    assert "alarms" not in manifest["permissions"]
+                    assert manifest["content_scripts"][0]["matches"] == [
+                        "https://aahoteloptimizer.streamlit.app/*"
+                    ]
+                    assert "icon-128.png" in zip_file.namelist()
+                phone.screenshot(path=str(ARTIFACTS / "connection-mobile.png"), full_page=True)
+                passed(
+                    "Published app can deliver the actual domain-bound beta package without cURL"
+                )
                 passed(
                     "Phone layout fits; another browser session cannot access connections or search history"
                 )
 
+                context.close()
+                context = launch()
+                context.route("https://www.aadvantagehotels.com/**", provider_route)
+                page = context.new_page()
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(origin)
+                expect(page.locator("#connection-title")).to_have_text(
+                    "AA Hotels connected", timeout=30000
+                )
+                passed("Remembered connection also restores after restarting Chrome")
+                signed_in = False
+                page.reload()
+                expect(page.locator("#connection-title")).to_have_text(
+                    "Sign in to AA Hotels again", timeout=30000
+                )
+                signed_in = True
+                page.locator("#connect-button").click()
+                page.locator("#pair-button").click()
+                expect(page.locator("#dialog")).not_to_be_visible(timeout=30000)
+                expect(page.locator("#connection-title")).to_have_text("AA Hotels connected")
+                passed("Only an expired AA session requires sign-in again; reconnect recovers")
+                account_id = "different-account"
+                previous_calls = len(provider_calls)
+                page.locator("#city").fill("Chicago, Illinois")
+                page.locator("#check-in").fill(start.isoformat())
+                page.locator("#check-out").fill((start + timedelta(days=1)).isoformat())
+                page.locator("#search-button").click()
+                expect(page.locator("#connection-title")).to_have_text(
+                    "Sign in to AA Hotels again", timeout=30000
+                )
+                assert not any(
+                    "/places" in url or "/searchRequest" in url
+                    for url in provider_calls[previous_calls:]
+                )
+                passed(
+                    "Changing AA accounts stops comparison before fetching another account's offers"
+                )
+                page.locator("#connect-button").click()
+                page.locator("#pair-button").click()
+                expect(page.locator("#dialog")).not_to_be_visible(timeout=30000)
                 page.locator("#connect-button").click()
                 page.locator("#session-disconnect").click()
                 expect(page.locator("#connection-title")).to_have_text(
@@ -188,7 +318,8 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                 expect(page.locator('[data-testid="stException"]')).to_have_count(0)
                 assert not errors, errors
                 passed("Disconnect clears connection; no browser or Streamlit errors")
-                browser.close()
+                context.close()
+                phone_browser.close()
         finally:
             server.terminate()
             try:

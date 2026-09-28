@@ -5,7 +5,11 @@ from pathlib import Path
 
 import streamlit as st
 
-if st.query_params.get("view") == "classic":
+if st.query_params.get("view") == "privacy":
+    st.set_page_config(page_title="LP Optimizer Companion privacy", page_icon="🏨")
+    st.markdown((Path(__file__).parent / "companion" / "PRIVACY.md").read_text())
+    st.link_button("Back to the planner", "/")
+elif st.query_params.get("view") == "classic":
     runpy.run_path(str(Path(__file__).with_name("streamlit_classic.py")), run_name="__main__")
 else:
     from aa_hotel_optimizer.streamlit_ui import render
