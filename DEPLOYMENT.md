@@ -103,6 +103,15 @@ The privacy URL is `https://aahoteloptimizer.streamlit.app/?view=privacy`.
 Automatic reconnection is tested with simulated sessions, including browser
 restart and session expiry; a permanent AA token or fixed lifetime is not assumed.
 
+Cloud can keep imported Python modules loaded while serving changed frontend
+assets. This release pins the tested Streamlit runtime and uses polling to watch
+imported source files. The component and its backend check the same preview
+protocol, and existing session state upgrades when that protocol changes. After
+deploying, verify a companion download and search at the public URL; a successful
+GitHub webhook alone does not prove the running backend has updated. If the app
+reports an update in progress persistently, reboot it from the owner's Streamlit
+dashboard to clear imported modules.
+
 Build the companion for the **actual deployed origin**:
 
 ```bash
