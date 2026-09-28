@@ -62,16 +62,25 @@ async function inProvider(task,openIfNeeded=false) {
   let tab=tabs.find(t=>t.active)||tabs[0];
   if(!tab?.id && openIfNeeded){
     tab=await chrome.tabs.create({url:'https://www.aadvantagehotels.com/',active:false});
-    await new Promise(resolve=>{
-      const timer=setTimeout(done,15000);
-      function done(){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);resolve();}
-      function listener(id,change){if(id===tab.id&&change.status==='complete')done();}
-      chrome.tabs.onUpdated.addListener(listener);
-      chrome.tabs.get(tab.id).then(current=>{if(current.status==='complete')done();}).catch(done);
-    });
   }
   if(!tab?.id)return {status:'browser_required'};
-  try {const results=await chrome.scripting.executeScript({target:{tabId:tab.id},world:'MAIN',func:providerRequest,args:[task]});return results[0]?.result||{status:'provider_error'};}
+  try {
+    // Chrome may restore an existing AA tab before its document is ready.
+    // Wait for both new and restored tabs, and wake a discarded preview tab.
+    if(tab.discarded&&openIfNeeded)await chrome.tabs.reload(tab.id);
+    const ready=await new Promise(resolve=>{
+      const timer=setTimeout(()=>done(false),15000);
+      function done(value){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);resolve(value);}
+      function check(){chrome.tabs.get(tab.id).then(current=>{
+        if(current.status==='complete'&&current.url?.startsWith('https://www.aadvantagehotels.com/'))done(true);
+      }).catch(()=>done(false));}
+      function listener(id,change){if(id===tab.id&&change.status==='complete')check();}
+      chrome.tabs.onUpdated.addListener(listener);
+      check();
+    });
+    if(!ready)return {status:'browser_required'};
+    const results=await chrome.scripting.executeScript({target:{tabId:tab.id},world:'MAIN',func:providerRequest,args:[task]});return results[0]?.result||{status:'provider_error'};
+  }
   catch{return {status:'browser_required'};}
 }
 async function heartbeat(key,result) {

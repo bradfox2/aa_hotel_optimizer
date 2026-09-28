@@ -6,12 +6,15 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
+from contextlib import ExitStack
 from datetime import date, timedelta
 from pathlib import Path
 from zipfile import ZipFile
 
+from browser_provider_fixture import provider_fixture
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +32,7 @@ def passed(message):
     print("PASS " + message, flush=True)
 
 
-with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
+with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp, ExitStack() as fixtures:
     fixture = Path(temp) / "fixture.py"
     fixture.write_text(
         "import runpy, sys\n"
@@ -84,6 +87,7 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                         headless=True,
                         **launch_args,
                         args=[
+                            *provider_args,
                             f"--disable-extensions-except={extension}",
                             f"--load-extension={extension}",
                         ],
@@ -91,17 +95,19 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                         viewport={"width": 1440, "height": 1100},
                     )
 
-                context = launch()
-                if not context.service_workers:
-                    context.wait_for_event("serviceworker", timeout=15000)
                 signed_in = False
                 account_id = "fixture-account"
                 provider_calls = []
+                delay_document = False
+                document_ready = threading.Event()
+                document_ready.set()
 
-                def provider_route(route):
-                    url = route.request.url
+                def provider_response(url):
                     provider_calls.append(url)
-                    if "/session" in url:
+                    if url == "/fixture-pending":
+                        document_ready.wait(timeout=10)
+                        return "image/svg+xml", '<svg xmlns="http://www.w3.org/2000/svg"/>'
+                    elif "/session" in url:
                         data = (
                             {"uuid": account_id, "firstName": "Example", "secret": "DO-NOT-EXPORT"}
                             if signed_in
@@ -129,17 +135,17 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                             ]
                         }
                     else:
-                        route.fulfill(
-                            status=200,
-                            content_type="text/html",
-                            body="<!doctype html><title>Fixture AA Hotels</title>",
+                        return (
+                            "text/html",
+                            "<!doctype html><title>Fixture AA Hotels</title>"
+                            + ('<img src="/fixture-pending">' if delay_document else ""),
                         )
-                        return
-                    route.fulfill(
-                        status=200, content_type="application/json", body=json.dumps(data)
-                    )
+                    return "application/json", json.dumps(data)
 
-                context.route("https://www.aadvantagehotels.com/**", provider_route)
+                provider_args = fixtures.enter_context(provider_fixture(provider_response))
+                context = launch()
+                if not context.service_workers:
+                    context.wait_for_event("serviceworker", timeout=15000)
                 page = context.new_page()
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -206,11 +212,33 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
                     "AA Hotels connected", timeout=30000
                 )
                 expect(page.locator(".result-card")).to_be_visible()
+                passed("Remembered connection restores after app reload without another login")
+
+                # Reconnecting during an existing AA tab's load must wait for its
+                # document, without asking the customer to repeat setup.
+                aa_tab = next(
+                    tab
+                    for tab in context.pages
+                    if tab.url.startswith("https://www.aadvantagehotels.com")
+                )
+                delay_document = True
+                document_ready.clear()
+                aa_tab.reload(wait_until="domcontentloaded")
+                calls_before = sum("/session" in url for url in provider_calls)
+                page.reload()
+                expect(page.locator(".result-card")).to_be_visible()
+                page.wait_for_timeout(500)
+                assert sum("/session" in url for url in provider_calls) == calls_before
+                document_ready.set()
+                delay_document = False
+                expect(page.locator("#connection-title")).to_have_text(
+                    "AA Hotels connected", timeout=15000
+                )
+                passed("Reconnection waits for an existing AA tab to finish loading")
                 page.locator("#city").fill("Chicago, Illinois")
                 for tab in context.pages:
                     if tab.url.startswith("https://www.aadvantagehotels.com"):
                         tab.close()
-                passed("Remembered connection restores after app reload without another login")
                 page.locator("#trip-tab").click()
                 start = date.today() + timedelta(days=28)
                 page.locator("#check-in").fill(start.isoformat())
@@ -272,7 +300,6 @@ with tempfile.TemporaryDirectory(prefix="lp-streamlit-test-") as temp:
 
                 context.close()
                 context = launch()
-                context.route("https://www.aadvantagehotels.com/**", provider_route)
                 page = context.new_page()
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(origin)

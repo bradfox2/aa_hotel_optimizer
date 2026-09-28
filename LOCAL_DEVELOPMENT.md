@@ -65,6 +65,10 @@ The browser smoke script starts its own isolated local server/database and uses
 fictional provider responses. It never signs in to a real AA account. Install a
 Playwright Chromium build (`.venv-service/bin/playwright install chromium`) if
 there is none cached. Test output and screenshots go in `.local`.
+The Streamlit browser check also needs `openssl`. It maps the AA hostname to a
+temporary local HTTPS fixture inside its isolated Chrome process, including the
+first navigation of tabs opened by the extension. Its ephemeral certificate is
+trusted only in that process; the laptop's DNS and certificate store are untouched.
 
 ## Existing workflows
 
