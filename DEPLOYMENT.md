@@ -11,13 +11,18 @@ actual companion with mocked AA responses, and SQLite/PostgreSQL migrations.
 
 `streamlit_app.py` now opens the shared redesigned planner. Its Streamlit v2
 component sends only a fixed set of planner actions over the session's widget
-channel. Live searches use the original provider functions with temporary cURL
-credentials, bounded background jobs, whole-stay/split comparisons, and in-memory
-session history. Credentials expire after 30 minutes; there is no shared cache,
-account database or payment bypass. `?view=classic` opens the original UI.
+channel. Live searches use the same companion adapter and leased task engine as
+the paid service. AA credentials remain in the AA browser tab. A separate
+in-memory database per Streamlit session stores normalized quotes, task leases
+and plans; it is discarded with that session. The companion remembers an approved
+account fingerprint in Chrome and restores its connection across visits and
+browser restarts. It opens AA Hotels when needed. Expired AA sessions require a
+fresh sign-in, and an account change stops work before another account's offers
+are fetched. `?view=classic` opens the original manual UI.
 
-The full login, companion bridge, Stripe webhook and agent API are served by
-FastAPI. The Streamlit preview explicitly disables those features and checkout.
+The full email login, durable companion bridge, Stripe webhook and agent API are
+served by FastAPI. The Streamlit preview uses a session-scoped browser relay and
+explicitly disables email accounts, billing and hosted agent endpoints.
 Deploy the full service using the prepared Render Blueprint, then link the
 existing public URL to that service after its integrations have been verified.
 CI now runs browser checks on the actual Streamlit entrypoint as well as the
@@ -90,6 +95,13 @@ published Chrome Web Store URL and the live-billing flag, plus completion of
 [B2C_BETA.md](B2C_BETA.md)'s release work.
 
 ## Companion and real search
+
+The Streamlit planner's connection dialog offers a ZIP bound to its public
+origin. Chrome Web Store registration and publication are still pending; the
+manual install is for the free beta. See [the store package](companion/STORE_LISTING.md).
+The privacy URL is `https://aahoteloptimizer.streamlit.app/?view=privacy`.
+Automatic reconnection is tested with simulated sessions, including browser
+restart and session expiry; a permanent AA token or fixed lifetime is not assumed.
 
 Build the companion for the **actual deployed origin**:
 

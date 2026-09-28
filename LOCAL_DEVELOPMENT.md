@@ -77,8 +77,11 @@ Their function signatures are preserved. They use the corrected shared selection
 logic, bounded pagination, secret-safe errors and consistent projected balances.
 Streamlit opens the same planner UI as the service and keeps form values and
 results across component reruns. It uses a session-only transport for the
-optimizer, with a temporary cURL connection for live searches. The Chrome
-companion, email accounts, billing and agent API require the standalone service.
+optimizer, with the Chrome companion returning results through the component.
+Build the companion for the local Streamlit origin with `scripts/build_companion.py`
+and install it once in a test Chrome profile. The connection is remembered across
+reloads and browser restarts, with AA sign-in again only when required by AA.
+Email accounts, billing and agent API require the standalone service.
 The original single-night search UI remains at `?view=classic`. No future
 threshold bonus is silently assumed. Both browser test scripts use fictional
 provider responses; they do not validate a real AA login or real email/payment.

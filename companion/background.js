@@ -5,6 +5,51 @@ const APP=globalThis.LP_APP_ORIGIN;
 const PROVIDER='https://www.aadvantagehotels.com/*';
 let working=false;
 chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
+chrome.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
+const previewBusy=new Set();
+let previewGeneration=0;
+
+async function previewRequest(message,sender){
+  const key='preview:'+sender.tab.id+':'+sender.frameId;
+  if(message.type==='PREVIEW_DISCONNECT'){
+    previewGeneration++;
+    await chrome.storage.session.remove(key);
+    await chrome.storage.local.remove('previewAccount');
+    await chrome.storage.local.set({connectionState:'not_connected'});
+    return {status:'ok'};
+  }
+  if(previewBusy.has(key))return {status:'rate_limited'};
+  previewBusy.add(key);
+  const generation=previewGeneration;
+  try{
+    if(['PREVIEW_CONNECT','PREVIEW_RESTORE'].includes(message.type)){
+      const {previewAccount}=await chrome.storage.local.get('previewAccount');
+      if(message.type==='PREVIEW_RESTORE'&&!previewAccount)return {status:'not_connected'};
+      const result=await inProvider({kind:'session',...(message.type==='PREVIEW_RESTORE'?{account_fingerprint:previewAccount.fingerprint}:{})},true);
+      if(generation!==previewGeneration)return {status:'browser_required'};
+      if(result.status==='ok'){
+        await chrome.storage.session.set({[key]:{fingerprint:result.account_fingerprint,next:0}});
+        await chrome.storage.local.set({previewAccount:{fingerprint:result.account_fingerprint,label:result.account_label}});
+      }
+      else await chrome.storage.session.remove(key);
+      await chrome.storage.local.set({connectionState:result.status==='ok'?'connected':result.status});
+      return result;
+    }
+    const saved=(await chrome.storage.session.get(key))[key];
+    const {previewAccount}=await chrome.storage.local.get('previewAccount');
+    if(!saved||!previewAccount||saved.fingerprint!==previewAccount.fingerprint)return {status:'browser_required'};
+    if(Date.now()<saved.next)return {status:'rate_limited'};
+    const task=message.task;
+    if(!task||!['places','start','results'].includes(task.kind)||JSON.stringify(task).length>10000)return {status:'provider_error'};
+    await chrome.storage.session.set({[key]:{...saved,next:Date.now()+2000}});
+    const result=await inProvider({...task,account_fingerprint:saved.fingerprint},true);
+    if(result.status==='account_changed'){
+      await chrome.storage.session.remove(key);
+      await chrome.storage.local.set({connectionState:'reauth_required'});
+    }
+    return result;
+  }finally{previewBusy.delete(key);}
+}
 
 async function call(path,body,key) {
   const response=await fetch(APP+path,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json',...(key?{Authorization:'Bearer '+key}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
@@ -12,9 +57,19 @@ async function call(path,body,key) {
   if(!response.ok){const error=new Error(data.detail?.message||'Open LP Optimizer and reconnect.');error.status=response.status;error.code=data.detail?.code;throw error;}
   return data;
 }
-async function inProvider(task) {
+async function inProvider(task,openIfNeeded=false) {
   const tabs=await chrome.tabs.query({url:PROVIDER});
-  const tab=tabs.find(t=>t.active)||tabs[0];
+  let tab=tabs.find(t=>t.active)||tabs[0];
+  if(!tab?.id && openIfNeeded){
+    tab=await chrome.tabs.create({url:'https://www.aadvantagehotels.com/',active:false});
+    await new Promise(resolve=>{
+      const timer=setTimeout(done,15000);
+      function done(){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);resolve();}
+      function listener(id,change){if(id===tab.id&&change.status==='complete')done();}
+      chrome.tabs.onUpdated.addListener(listener);
+      chrome.tabs.get(tab.id).then(current=>{if(current.status==='complete')done();}).catch(done);
+    });
+  }
   if(!tab?.id)return {status:'browser_required'};
   try {const results=await chrome.scripting.executeScript({target:{tabId:tab.id},world:'MAIN',func:providerRequest,args:[task]});return results[0]?.result||{status:'provider_error'};}
   catch{return {status:'browser_required'};}
@@ -66,8 +121,10 @@ async function tick(force=false) {
     // Never log API bodies, provider responses, session details or keys.
   } finally {working=false;}
 }
-chrome.alarms.create('lp-work',{periodInMinutes:0.5});
-chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name==='lp-work')tick();});
+if(chrome.alarms){
+  chrome.alarms.create('lp-work',{periodInMinutes:0.5});
+  chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name==='lp-work')tick();});
+}
 chrome.runtime.onStartup.addListener(()=>tick());
 chrome.tabs.onUpdated.addListener((_id,change,tab)=>{
   if(change.status==='complete' && tab.url?.startsWith('https://www.aadvantagehotels.com/'))tick(true);
@@ -76,6 +133,11 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   let origin;
   try{origin=new URL(sender.url).origin;}catch{return;}
   if(origin!==APP && !sender.url?.startsWith(chrome.runtime.getURL('')))return;
+  if(['PREVIEW_CONNECT','PREVIEW_RESTORE','PREVIEW_TASK','PREVIEW_DISCONNECT'].includes(message.type)){
+    if(origin!==APP||!sender.tab?.id)return;
+    previewRequest(message,sender).then(reply).catch(()=>reply({status:'provider_error'}));
+    return true;
+  }
   if(message.type==='PAIR') {
     if(origin!==APP||typeof message.token!=='string'||message.token.length>100)return;
     (async()=>{

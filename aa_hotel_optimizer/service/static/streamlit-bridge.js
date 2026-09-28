@@ -11,7 +11,7 @@ export default function(component) {
       if(active||!queue.length)return;
       active=queue.shift();
       runtime.send('request',active.event);
-      // Drop the copied credential as soon as the widget request is sent.
+      // Retain only the correlation ID after handing a request to Streamlit.
       active.event={id:active.event.id};
     };
     runtime.receive=response=>{
