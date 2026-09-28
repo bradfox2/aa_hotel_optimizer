@@ -1,6 +1,6 @@
 # Hosted beta setup
 
-The public legacy application is <https://aahoteloptimizer.streamlit.app/>.
+The public planner is <https://aahoteloptimizer.streamlit.app/>.
 Its repository is <https://github.com/bradfox2/aa_hotel_optimizer>. Before this
 change, `main` at `66678a3` had no GitHub Actions workflows or commit checks.
 The live Streamlit metadata confirms branch `main`, entrypoint `streamlit_app.py`,
@@ -9,10 +9,20 @@ is separate from CI. Python 3.11 compatibility is preserved; no deletion or
 redeployment of the existing app is needed to change the interpreter. The new GitHub workflow checks the engine, accounts, billing,
 actual companion with mocked AA responses, and SQLite/PostgreSQL migrations.
 
-The new consumer website, login, bridge, Stripe webhook and agent API are served
-by FastAPI. Running `streamlit_app.py` alone does not expose those routes. Deploy
-the full service using the prepared Render Blueprint; retain the legacy URL and
-link it to the new beta after that service is verified.
+`streamlit_app.py` now opens the shared redesigned planner. Its Streamlit v2
+component sends only a fixed set of planner actions over the session's widget
+channel. Live searches use the original provider functions with temporary cURL
+credentials, bounded background jobs, whole-stay/split comparisons, and in-memory
+session history. Credentials expire after 30 minutes; there is no shared cache,
+account database or payment bypass. `?view=classic` opens the original UI.
+
+The full login, companion bridge, Stripe webhook and agent API are served by
+FastAPI. The Streamlit preview explicitly disables those features and checkout.
+Deploy the full service using the prepared Render Blueprint, then link the
+existing public URL to that service after its integrations have been verified.
+CI now runs browser checks on the actual Streamlit entrypoint as well as the
+standalone service, so a successful legacy-only deployment cannot pass as the
+redesigned planner again. All AA/Stripe/Resend responses in these checks are simulated.
 
 ## What is ready, and what needs account access
 
