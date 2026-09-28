@@ -1,13 +1,17 @@
-const $ = (id) => document.getElementById(id);
+export function mountApp(root=document, transport=null) {
+const $ = (id) => root.querySelector('#'+id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number = value => new Intl.NumberFormat('en-US').format(value);
 const money = cents => new Intl.NumberFormat('en-US', {style:'currency',currency:'USD',maximumFractionDigits:cents % 100 ? 2 : 0}).format(cents/100);
 const day = value => new Date(value+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
 const iso = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 const state = {mode:'trip',config:{},me:null,result:null,companion:false,poll:null,busy:false};
-let toastTimer;
+let toastTimer, accountTimer;
+const listeners = new AbortController();
+const preview = () => state.config.deployment==='streamlit';
 
 async function api(path, {method='GET',body,headers={}}={}) {
+  if(transport)return transport(path,{method,body,headers});
   const response = await fetch(path, {method,credentials:'same-origin',headers:{...(body !== undefined ? {'Content-Type':'application/json'} : {}),...headers}, ...(body !== undefined ? {body:JSON.stringify(body)} : {})});
   const data = await response.json();
   if (!response.ok) {
@@ -38,7 +42,7 @@ function formRequest() {
 }
 function setMode(mode) {
   state.mode=mode;
-  for(const button of document.querySelectorAll('[data-mode]'))button.setAttribute('aria-selected',String(button.dataset.mode===mode));
+  for(const button of root.querySelectorAll('[data-mode]'))button.setAttribute('aria-selected',String(button.dataset.mode===mode));
   $('city-field').hidden=mode!=='trip';$('city').required=mode==='trip';$('cities-field').hidden=mode!=='status';
   $('status-fields').hidden=mode!=='status';$('trip-options').hidden=mode!=='trip';
   $('form-title').textContent=mode==='trip'?'Where are you staying?':'How far from your next status?';
@@ -48,17 +52,17 @@ function setMode(mode) {
   const fastest=$('objective').querySelector('[value="fastest"]');fastest.hidden=mode!=='status';
   if(mode==='trip' && $('objective').value==='fastest')$('objective').value='value';
 }
-document.querySelectorAll('[data-mode]').forEach(button=>button.onclick=()=>setMode(button.dataset.mode));
+root.querySelectorAll('[data-mode]').forEach(button=>button.onclick=()=>setMode(button.dataset.mode));
 $('popular-cities').onclick=()=>{$('cities').value=state.config.popular_cities.join('\n');};
 $('partner-bonus').onchange=()=>{$('bonus-remaining').max=$('partner-bonus').value==='25'?'25000':'500000';$('bonus-fields').hidden=$('partner-bonus').value==='0';$('bonus-start').required=$('bonus-end').required=$('partner-bonus').value!=='0';};
 
 async function loadMe() {
   try {state.me=await api('/v1/me');} catch(error) {if(error.status!==401)throw error;state.me=null;}
-  $('account-button').textContent=state.me?'My account':'Sign in';
+  $('account-button').textContent=preview()?'Preview status':state.me?'My account':'Sign in';
   const connection=state.me?.connection;
   const connected=connection?.state==='connected';
   $('connection-dot').classList.toggle('connected',connected);
-  $('connection-title').textContent=connected?'AA Hotels connected':connection?.state==='reauth_required'?'Sign in to AA Hotels again':connection?.state==='browser_required'?'Open your AA Hotels tab':'Connect AA Hotels';
+  $('connection-title').textContent=connected?(preview()?'AA Hotels session added':'AA Hotels connected'):connection?.state==='reauth_required'?'Sign in to AA Hotels again':connection?.state==='browser_required'?'Open your AA Hotels tab':'Connect AA Hotels';
   $('connection-subtitle').textContent=connected?(connection.account_label || 'Your personal offers are ready'):'Use your personal hotel offers';
 }
 function signIn(reason='Save your searches and compare your personal AA Hotels offers.') {
@@ -80,7 +84,24 @@ async function consumeLogin(raw) {
   catch(error){signIn(error.message);}
 }
 
+function previewStatus() {
+  modal('<h2>The new planner is here.</h2><p>Compare whole stays and split reservations, plan a status goal, and download a booking checklist.</p><p>This preview is free. Email accounts, paid passes, membership, and the Chrome companion are still being connected. Searches are kept for this session only.</p><button id="preview-connect" class="button primary full">Connect a temporary AA Hotels session</button><button id="preview-pricing" class="button quiet full">See planned pricing</button>','PUBLIC PREVIEW');
+  $('preview-connect').onclick=previewConnection;
+  $('preview-pricing').onclick=()=>pricing();
+}
+function previewConnection() {
+  const connected=state.me?.connection.state==='connected';
+  modal(`<h2>${connected?'Your temporary session':'Connect your personal offers'}</h2><p>The easy Chrome connection is coming. For now, live searches use the same temporary cURL connection as the original app.</p><ol class="steps"><li><strong>Sign in and search on AA Hotels</strong><a class="button outline small" href="https://www.aadvantagehotels.com" target="_blank" rel="noopener noreferrer">Open AA Hotels ↗</a></li><li><strong>Copy the search request</strong><small>In Chrome, open Developer tools → Network. Search for “searchRequest”, right-click the request, then Copy → Copy as cURL (bash).</small></li><li><strong>Paste it below</strong><small>We read the session headers. The command is never executed.</small></li></ol><form id="session-form"><label>AA Hotels cURL request<textarea id="session-curl" rows="4" maxlength="64000" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the copied request"></textarea></label><button id="session-connect" class="button primary full">Use this session</button></form>${connected?'<button id="session-disconnect" class="button quiet full">Disconnect AA Hotels</button>':''}<p class="dialog-note">This request contains login credentials. The preview sends them only to AA Hotels and keeps them in this server session’s memory for up to 30 minutes. They are not saved to disk. Do not share the request.</p>`,'TEMPORARY CONNECTION');
+  $('session-form').onsubmit=async event=>{
+    event.preventDefault();$('session-connect').disabled=true;
+    const curl=$('session-curl').value;$('session-curl').value='';
+    try{await api('/v1/session/connection',{method:'POST',body:{curl}});await loadMe();$('dialog').close();toast('Session added. Start a search to check your offers.');}
+    catch(error){modalError(error);$('session-connect').disabled=false;}
+  };
+  if($('session-disconnect'))$('session-disconnect').onclick=async()=>{await api('/v1/session/connection',{method:'DELETE'});await loadMe();$('dialog').close();toast('AA Hotels disconnected.');};
+}
 function connectionModal() {
+  if(preview())return previewConnection();
   if(!state.me)return signIn('Sign in to connect your personal AA Hotels offers.');
   const installed=state.companion;
   const store=state.config.companion_url;
@@ -101,9 +122,10 @@ window.addEventListener('message',async event=>{
     if($('pair-button'))$('pair-button').disabled=false;
     if(state.me?.connection.state==='connected'){toast('AA Hotels connected.');$('dialog').close();}
   }
-});
+},{signal:listeners.signal});
 
 async function account() {
+  if(preview())return previewStatus();
   if(!state.me)return signIn();
   await loadMe();
   const user=state.me, usage=user.usage;
@@ -130,6 +152,11 @@ function pricing(exhausted=false) {
   modal(`<h2>${exhausted?'Keep comparing your options.':'A pass for a trip. A plan for more.'}</h2><p>${exhausted?'You’ve used your included searches. Your saved results are still yours.':`${number(config.free_searches)} free searches. No card required. Both options include trip planning, status searches, and agent access.`}</p><div class="price-option"><div><h3>Trip pass</h3><strong>${esc(config.trip_pass_price_label)} <small>once</small></strong></div><p>${number(config.trip_pass_searches)} extra searches. No expiry. No subscription.</p><button id="buy-pass" class="button primary full" ${config.billing_enabled?'':'disabled'}>Get a trip pass →</button></div><div class="price-option"><div><h3>Monthly membership</h3><strong>${esc(config.plan_price_label)}</strong></div><p>${number(config.paid_searches_per_month)} searches per calendar month. Renews monthly until you cancel. Cancel in My account.</p><button id="buy-membership" class="button outline full" ${config.billing_enabled?'':'disabled'}>${state.me?.billing_action==='portal'?'Manage membership':'Start membership →'}</button></div><p class="dialog-note">${config.billing_enabled?(config.billing_test_mode?'Test checkout — no real charges.':'Secure checkout with Stripe. Prices in USD.'):'Checkout is being set up. You can explore the example now.'} Failed provider searches return your allowance. Monthly searches reset on the first of each month (UTC); trip-pass searches carry over.</p>`,'PASSES & MEMBERSHIP');
   $('buy-pass').onclick=()=>startCheckout('trip_pass','buy-pass');
   $('buy-membership').onclick=()=>startCheckout('membership','buy-membership');
+  if(preview()){
+    $('dialog-eyebrow').textContent='PLANNED PRICING';
+    $('dialog-content').querySelector('p').textContent='This preview is free. At launch: 2 free searches, then a trip pass or monthly membership. Prices in USD.';
+    $('dialog-content').querySelector('.dialog-note').textContent='Purchases are unavailable in this preview. Email accounts, payments, and the published Chrome companion are still being connected.';
+  }
 }
 async function startCheckout(product,buttonId) {
   if(!state.me)return signIn('Sign in to save your purchase to your account.');
@@ -159,18 +186,24 @@ function restoreDraft(){
   }catch{/* Ignore an obsolete draft. */}
 }
 async function agents() {
+  if(preview()){modal('<h2>Plans your agent can read.</h2><p>Download any booking plan as JSON. Hosted search endpoints and scoped agent keys are part of the upcoming service.</p><p class="dialog-note">Agent API access is not available at this Streamlit address.</p>','FOR AGENTS');return;}
   if(!state.me)return signIn('Create a scoped key so your agent can search, check progress, and read saved booking plans.');
   const keys=await api('/v1/keys');
   modal(`<h2>Let your agent do the comparing.</h2><p>Keys can create searches and read your plans. Your connected browser supplies your personal offers.</p><a class="button outline" href="/static/agents.html" target="_blank" rel="noopener">Read the API guide ↗</a><form id="key-form"><label>Key name<input id="key-name" required value="My travel agent" maxlength="80"></label><label>Access<select id="key-scope"><option value="write">Create searches and read results</option><option value="read">Read results only</option></select></label><button class="button primary full">Create a key</button></form><div id="new-key"></div><div id="key-list">${keys.map(k=>`<div class="key-row"><div><strong>${esc(k.label)}</strong><p>Expires ${esc(day(k.expires_at.slice(0,10)))}</p></div><button class="text-button" data-revoke="${esc(k.id)}">Revoke</button></div>`).join('')}</div><p class="dialog-note">Keys expire after 90 days. They cannot change billing, manage connections, or make hotel reservations.</p>`,'FOR AGENTS');
   $('key-form').onsubmit=async event=>{event.preventDefault();try{const result=await api('/v1/keys',{method:'POST',body:{label:$('key-name').value,scopes:$('key-scope').value==='read'?['search:read']:['search:read','search:write']}});$('key-form').hidden=true;$('new-key').innerHTML=`<p class="dialog-note">Copy this key now. We won't show it again.</p><pre class="key-output">${esc(result.key)}</pre><button id="copy-key" class="button outline full">Copy key</button>`;$('copy-key').onclick=()=>copy(result.key,'Key copied.');}catch(error){modalError(error);}};
-  document.querySelectorAll('[data-revoke]').forEach(button=>button.onclick=async()=>{await api('/v1/keys/'+button.dataset.revoke,{method:'DELETE',body:{}});button.closest('.key-row').remove();toast('Key revoked.');});
+  root.querySelectorAll('[data-revoke]').forEach(button=>button.onclick=async()=>{await api('/v1/keys/'+button.dataset.revoke,{method:'DELETE',body:{}});button.closest('.key-row').remove();toast('Key revoked.');});
 }
 $('agents-button').onclick=()=>agents().catch(modalError);
 async function history() {
   if(!state.me)return signIn('Your saved searches will be waiting here when you sign in.');
   const searches=await api('/v1/searches');
   modal(`<h2>Your saved searches</h2>${searches.length?'':'<p>Compare your next stay and the results will appear here. Examples are not saved.</p>'}${searches.map(s=>`<div class="history-row"><button class="text-button" data-search="${esc(s.id)}"><strong>${esc(s.request.cities.join(' · '))}</strong><p>${esc(day(s.request.check_in))} – ${esc(day(s.request.check_out))} · ${esc(s.status.replaceAll('_',' '))}</p></button><span aria-hidden="true">↗</span></div>`).join('')}`,'SAVED SEARCHES');
-  document.querySelectorAll('[data-search]').forEach(button=>button.onclick=async()=>{try{const result=await api('/v1/searches/'+button.dataset.search);$('dialog').close();showResult(result);schedulePoll(result);$('results').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){modalError(error);}});
+  if(preview()){
+    $('dialog-content').querySelector('h2').textContent='Searches in this session';
+    $('dialog-eyebrow').textContent='SESSION SEARCHES';
+    const note=document.createElement('p');note.className='dialog-note';note.textContent='Keeps your last 10 searches while this session is open. Download a plan to keep it after reloading or closing this tab.';$('dialog-content').append(note);
+  }
+  root.querySelectorAll('[data-search]').forEach(button=>button.onclick=async()=>{try{const result=await api('/v1/searches/'+button.dataset.search);$('dialog').close();showResult(result);schedulePoll(result);$('results').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){modalError(error);}});
 }
 $('history-button').onclick=()=>history().catch(modalError);
 
@@ -185,7 +218,7 @@ function showResult(result, selected=0) {
     $('cancel-search').onclick=async()=>{const cancelled=await api('/v1/searches/'+result.id+'/cancel',{method:'POST',body:{}});clearTimeout(state.poll);showResult(cancelled);};return;
   }
   if(result.status==='cancelled'){emptyResult('Search cancelled.','Change your dates or preferences and compare again.');return;}
-  if(result.status==='failed'){emptyResult('Let’s adjust this search.',errors[result.error_code]||'We couldn’t complete the comparison. Please try again.');return;}
+  if(result.status==='failed'){emptyResult('Let’s adjust this search.',result.error_message||errors[result.error_code]||'We couldn’t complete the comparison. Please try again.');return;}
   if(!result.plans?.length){emptyResult('No complete plan found.','Try increasing your budget, relaxing your filters, or allowing a hotel change.');return;}
   const plan=result.plans[selected], req=result.request, sample=Boolean(result.sample);
   const sameHotel=new Set(plan.offers.map(q=>q.property_id)).size===1;
@@ -207,7 +240,7 @@ function showResult(result, selected=0) {
   $('copy-plan').onclick=()=>copy(planText(plan,result),'Booking plan copied.');
   $('download-plan').onclick=()=>{const blob=new Blob([JSON.stringify({sample,request:req,plan,warnings:result.warnings},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`lp-plan-${req.check_in}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   if($('personal-rates'))$('personal-rates').onclick=()=>state.me?connectionModal():signIn();
-  document.querySelectorAll('[data-plan]').forEach(button=>button.onclick=()=>showResult(result,Number(button.dataset.plan)));
+  root.querySelectorAll('[data-plan]').forEach(button=>button.onclick=()=>showResult(result,Number(button.dataset.plan)));
 }
 function planText(plan,result){return `${result.sample?'EXAMPLE — fictional quotes\n':''}LP Optimizer booking plan\n${number(plan.earned_lp)} estimated LP · ${money(plan.cost_cents)} total · ${plan.lp_per_dollar} LP/$\n\n${plan.offers.map((q,i)=>`${i+1}. ${q.name}, ${q.city}\n   ${q.check_in} to ${q.check_out} · ${money(q.price_cents)} · ${number(q.base_lp)} hotel LP`).join('\n')}\n\nConfirm final prices, eligible rewards, and reservation terms on AA Hotels. No bookings have been made.`;}
 async function copy(value,message){try{await navigator.clipboard.writeText(value);toast(message);}catch{toast('Clipboard access is unavailable. Use Download JSON to save this plan.');}}
@@ -216,7 +249,7 @@ async function runSearch(sample=false) {
   if(state.busy)return;
   $('form-error').hidden=true;
   if(!sample&&!state.me)return signIn();
-  if(!sample&&state.me?.usage.remaining===0)return pricing(true);
+  if(!sample&&!preview()&&state.me?.usage.remaining===0)return pricing(true);
   if(!sample&&!state.config.provider_enabled){notice('Live offers are not enabled in this local preview. You can explore the example and account flows.');return;}
   if(!sample&&state.me?.connection.state!=='connected')return connectionModal();
   state.busy=true;$('results').setAttribute('aria-busy','true');$('search-button').disabled=$('demo-button').disabled=true;
@@ -236,7 +269,7 @@ async function consumeLoginFragment(){
     await consumeLogin(raw);
   }
 }
-window.addEventListener('hashchange',consumeLoginFragment);
+window.addEventListener('hashchange',consumeLoginFragment,{signal:listeners.signal});
 
 async function initialize(){
   const start=new Date();start.setDate(start.getDate()+28);const end=new Date(start);end.setDate(end.getDate()+4);
@@ -244,13 +277,23 @@ async function initialize(){
   try{state.config=await api('/v1/config');await loadMe();
     await consumeLoginFragment();
     restoreDraft();
-    $('trial-note').textContent=`${number(state.config.free_searches)} free searches. No card required.`;
+    $('trial-note').textContent=preview()?'Free preview · no account or payment required':`${number(state.config.free_searches)} free searches. No card required.`;
+    if(preview()){
+      $('history-button').textContent='Session searches';
+      notice('New planner preview · Live searches still use a temporary AA Hotels session. Email sign-in, payments, and the Chrome companion are coming next.');
+      const guide=root.querySelector('a[href="/static/agents.html"]');
+      guide.href='/?view=classic';guide.textContent='Original app ↗';guide.target='_top';
+      root.querySelector('.brand').href='/';root.querySelector('.brand').target='_top';
+      $('privacy-button').onclick=()=>modal('<h2>Your preview session.</h2><p>Searches and a temporary AA Hotels session stay in this server session’s memory. They are not saved to a database or shared with other visitors. Reconnecting, disconnecting, or the 30-minute expiry clears the stored AA session.</p><p>Download your plan before closing or reloading the tab. A running search may take a moment to stop. This preview does not create an email account or accept payments.</p>','DATA & PRIVACY');
+    }
     const params=new URLSearchParams(location.search);
     if(params.get('billing')==='success')notice('Checkout finished. Your searches unlock after payment is confirmed. Your search details are ready below.');
     if(params.get('billing')==='cancelled')notice('Checkout cancelled. Your search details are ready below.');
     await runSearch(true);window.postMessage({source:'lp-optimizer',type:'PING'},location.origin);
     if(params.has('connect'))connectionModal();
-    setInterval(()=>{if(state.me)loadMe().catch(()=>{});},20000);
+    accountTimer=setInterval(()=>{if(state.me)loadMe().catch(()=>{});},20000);
   }catch(error){emptyResult('We couldn’t load the app.',error.message);}
 }
 initialize();
+return ()=>{listeners.abort();clearTimeout(toastTimer);clearTimeout(state.poll);clearInterval(accountTimer);};
+}

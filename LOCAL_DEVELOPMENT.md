@@ -58,6 +58,7 @@ UV_PROJECT_ENVIRONMENT=.venv-service uv sync --frozen --extra dev
 .venv-service/bin/ruff check aa_hotel_optimizer tests scripts migrations
 .venv-service/bin/ruff format --check aa_hotel_optimizer tests scripts migrations
 .venv-service/bin/python scripts/browser_smoke.py
+.venv-service/bin/python scripts/streamlit_browser_smoke.py
 ```
 
 The browser smoke script starts its own isolated local server/database and uses
@@ -74,9 +75,13 @@ UV_PROJECT_ENVIRONMENT=.venv-service uv run --frozen python -m aa_hotel_optimize
 
 Their function signatures are preserved. They use the corrected shared selection
 logic, bounded pagination, secret-safe errors and consistent projected balances.
-Streamlit keeps the last result across reruns. Its original single-night search
-UI remains available; full interval comparison and explicit active-bonus controls
-are in the new service UI. No future threshold bonus is silently assumed.
+Streamlit opens the same planner UI as the service and keeps form values and
+results across component reruns. It uses a session-only transport for the
+optimizer, with a temporary cURL connection for live searches. The Chrome
+companion, email accounts, billing and agent API require the standalone service.
+The original single-night search UI remains at `?view=classic`. No future
+threshold bonus is silently assumed. Both browser test scripts use fictional
+provider responses; they do not validate a real AA login or real email/payment.
 
 ## Database migrations
 

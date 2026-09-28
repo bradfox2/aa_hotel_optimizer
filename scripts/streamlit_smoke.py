@@ -13,9 +13,19 @@ app = AppTest.from_file(
 ).run()
 if app.exception:
     raise RuntimeError([exception.message for exception in app.exception])
+assert "lp_preview" in app.session_state
+print("PASS Streamlit mounts the new planner by default")
+
+app = AppTest.from_file(
+    Path(__file__).resolve().parents[1] / "streamlit_app.py", default_timeout=30
+)
+app.query_params["view"] = "classic"
+app.run()
+if app.exception:
+    raise RuntimeError([exception.message for exception in app.exception])
 if not app.title or "Hotel" not in app.title[0].value:
     raise RuntimeError("The Streamlit planner did not render.")
-print("PASS Streamlit planner loads on the deployment interpreter")
+print("PASS Original planner remains available on the deployment interpreter")
 stay = main.analyze_hotel_data(
     {
         "results": [

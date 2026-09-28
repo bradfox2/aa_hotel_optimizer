@@ -1,8 +1,9 @@
 # LP Optimizer
 
 Compare combinations of AA Hotels reservations to earn more AAdvantage Loyalty
-Points for a trip, or find stays that close a status gap. The original Streamlit
-and CLI workflows are preserved. A customer service now wraps the shared engine.
+Points for a trip, or find stays that close a status gap. The new planner runs at
+<https://aahoteloptimizer.streamlit.app/>. The original interface remains available
+at `?view=classic`; the CLI workflow is preserved.
 
 ## Try the local app
 
@@ -48,7 +49,12 @@ market-wide inventory, reward posting, or that a quoted room remains bookable.
 
 ## Current release boundary
 
-This is a **local/private-beta implementation**, not a launched paid service.
+This is a **public planner preview plus a local/private-beta service implementation**,
+not a launched paid service. Streamlit shares the redesigned interface and engine:
+trip and status comparisons, session history and JSON downloads work there.
+Personal live searches still require the original temporary cURL connection.
+Streamlit keeps credentials in session memory, expires them after 30 minutes,
+and limits concurrent searches. It does not host accounts, payments or agent APIs.
 The full app and actual Chrome companion are exercised with mocked provider
 responses. A real personalized AA Hotels session, live Stripe test account,
 Email delivery and deployed PostgreSQL still need integration validation.
@@ -63,8 +69,7 @@ amount and labels this assumption. A verified base-LP/promotion breakdown and a
 confirmed booking deep link are still needed for stronger live quote guarantees.
 Saved quotes are timestamped; users should run a fresh comparison before booking.
 
-The legacy public URL is <https://aahoteloptimizer.streamlit.app/>. The full
-consumer service has a prepared [Render deployment](DEPLOYMENT.md), Resend email
+The full consumer service has a prepared [Render deployment](DEPLOYMENT.md), Resend email
 delivery, invite controls and a Stripe sandbox path. These need owner-controlled
 accounts before the hosted integrations can be verified.
 
@@ -77,6 +82,8 @@ accounts before the hosted integrations can be verified.
 | `aa_hotel_optimizer/legacy.py` | Existing function contracts and cURL parser |
 | `aa_hotel_optimizer/main.py` | Original provider client and CLI orchestration |
 | `aa_hotel_optimizer/service/` | API, accounts, jobs, billing, database and customer UI |
+| `aa_hotel_optimizer/streamlit_ui.py`, `streamlit_runtime.py` | Shared planner on Streamlit and session-only search transport |
+| `streamlit_app.py`, `streamlit_classic.py` | Public entrypoint and original interface fallback |
 | `companion/` | Domain-bound Chrome browser companion |
 | `migrations/` | Versioned database schema |
 | `tests/`, `scripts/browser_smoke.py` | Engine, security, billing and full browser checks |

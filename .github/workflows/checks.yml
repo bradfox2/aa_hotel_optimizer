@@ -35,6 +35,9 @@ jobs:
         if: matrix.python == '3.12'
       - run: uv run --frozen python scripts/browser_smoke.py
         if: matrix.python == '3.12'
+      - name: Verify the public planner in a browser
+        run: uv run --frozen python scripts/streamlit_browser_smoke.py
+        if: matrix.python == '3.12'
       - name: Check migration against an empty database
         run: |
           mkdir -p .local
@@ -52,4 +55,6 @@ jobs:
         if: always() && matrix.python == '3.12'
         with:
           name: browser-checks
-          path: .local/browser-smoke/
+          path: |
+            .local/browser-smoke/
+            .local/streamlit-browser/
